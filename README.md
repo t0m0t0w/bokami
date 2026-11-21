@@ -1,6 +1,6 @@
 # Bokami
 
-Minimalistisk, rask bokleser og digital bokhylle for bildeserier, `.pdf` og `.epub`, laget i GitHub Dark / VS Code gråtonestil.
+Minimalistisk, rask bokleser og digital bokhylle for bildeserier, `.pdf` og `.epub`, laget av søte snille gem gem antigravity.
 
 ## Støttede bokformater
 
