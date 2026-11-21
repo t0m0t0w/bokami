@@ -18,8 +18,8 @@ Legg bøkene dine i `books/`-mappen (styres av miljøvariabelen `BOOKS_DIR` elle
        0002.jpg    # Side 2
        ...
    ```
-2. **PDF og EPUB:**
-   Legg `.pdf`- eller `.epub`-filer direkte i `books/`, i en egen undermappe (gjerne sammen med `c1.jpg` / `c2.jpg` / `c3.jpg`), eller last opp filer direkte fra **Innstillinger (⚙)**.
+2. **PDF, EPUB og bildebok-ZIP:**
+   Legg `.pdf`- eller `.epub`-filer direkte i `books/`, i en egen undermappe (gjerne sammen med `c1.jpg` / `c2.jpg` / `c3.jpg`), eller last opp `.pdf`, `.epub` eller `.zip` (med bildefiler) direkte fra **Innstillinger (⚙)** som admin.
 
 ## Funksjoner
 

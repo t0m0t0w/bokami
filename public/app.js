@@ -1061,30 +1061,82 @@
     thumbEl.style.setProperty('--grid-book-w', `${widthPct}%`);
   }
 
-  function computeCarouselItemSize(book, mode, isCenter) {
+  function computeCarouselItemSize(book, mode, isCenter, loadedImg = null) {
     const { c1, c2, c3 } = getBookDims(book);
     const stageH = el.spineStage.clientHeight || (window.innerWidth <= 768 ? 320 : 500);
     const maxBookH = Math.max(220, stageH - 28);
 
     const scale = Math.max(0.5, Math.min(1.5, Number(book.sizeScale) || 1.0));
-    const bookHeight = Math.round(maxBookH * scale);
+    const targetHeight = Math.round(maxBookH * scale);
+    const naturalRatio =
+      loadedImg && loadedImg.complete && loadedImg.naturalWidth > 0 && loadedImg.naturalHeight > 0
+        ? loadedImg.naturalWidth / loadedImg.naturalHeight
+        : null;
 
     if (isCenter && mode !== 'c2') {
+      const hasCoverImg = Boolean(book.covers && (book.covers[mode] || book.covers.c1));
       const activeDim = mode === 'c3' ? c3 : c1;
-      const activeRatio = activeDim.ratio || 0.732;
-      const bookWidth = Math.round(bookHeight * activeRatio);
-      return { width: bookWidth, height: bookHeight };
+      const ratio = naturalRatio || activeDim.ratio || 0.732;
+      const bookWidth = Math.round(targetHeight * ratio);
+      return {
+        width: bookWidth,
+        height: hasCoverImg ? null : targetHeight,
+        targetHeight,
+        ratio
+      };
     }
 
-    if (book.covers && book.covers.hasC2 && c2.ratio) {
-      const exactSpineWidth = Math.max(16, Math.round(bookHeight * c2.ratio));
-      return { width: exactSpineWidth, height: bookHeight };
+    if (book.covers && book.covers.hasC2) {
+      const ratio = naturalRatio || c2.ratio || 0.065;
+      const exactSpineWidth = Math.max(16, Math.round(targetHeight * ratio));
+      return {
+        width: exactSpineWidth,
+        height: null,
+        targetHeight,
+        ratio
+      };
     }
 
     const isMobile = window.innerWidth <= 768;
     const baseGeneratedW = isMobile ? 34 : 44;
     const spineWidth = Math.round(baseGeneratedW * scale);
-    return { width: spineWidth, height: bookHeight };
+    return { width: spineWidth, height: targetHeight, targetHeight, ratio: spineWidth / targetHeight };
+  }
+
+  function applySpineItemSize(item, mediaSlot, book, mode, isCenter) {
+    const img = mediaSlot ? mediaSlot.querySelector(':scope > img') : null;
+    const size = computeCarouselItemSize(book, mode, isCenter, img);
+
+    if (img) {
+      const borderW = window.innerWidth <= 768 ? 2 : 3;
+      const widthPx = Math.max(16, size.width + borderW);
+      const heightPx = size.targetHeight + borderW;
+      item.style.width = `${widthPx}px`;
+      item.style.height = `${heightPx}px`;
+      item.dataset.targetWidth = String(widthPx);
+      if (mediaSlot) mediaSlot.style.height = '100%';
+
+      if (!img.complete || img.naturalWidth === 0) {
+        img.addEventListener(
+          'load',
+          () => {
+            if (!img.isConnected || !img.naturalWidth || !img.naturalHeight) return;
+            const naturalSize = computeCarouselItemSize(book, mode, isCenter, img);
+            const naturalWidthPx = Math.max(16, naturalSize.width + borderW);
+            item.style.width = `${naturalWidthPx}px`;
+            item.dataset.targetWidth = String(naturalWidthPx);
+            centerActiveSpineItem();
+          },
+          { once: true }
+        );
+      }
+      return;
+    }
+
+    item.style.width = `${size.width}px`;
+    item.style.height = `${size.height}px`;
+    item.dataset.targetWidth = String(size.width);
+    if (mediaSlot) mediaSlot.style.height = '100%';
   }
 
   function createCoverOrSpineNode(book, mode) {
@@ -1126,6 +1178,7 @@
     img.src = coverUrl;
     img.alt = book.title;
     img.loading = 'lazy';
+    img.decoding = 'async';
     return img;
   }
 
@@ -1167,7 +1220,7 @@
 
     if (!state.activeBook) {
       if (state.preferences.shelfView === 'spine') {
-        updateSpineCarouselSelection();
+        updateSpineCarouselSelection(true);
       } else {
         renderGridView();
       }
@@ -1278,17 +1331,13 @@
 
       const centerMode = state.carouselCoverMode || 'c1';
       const activeMode = isCenter ? centerMode : 'c2';
-
-      const size = computeCarouselItemSize(book, activeMode, isCenter);
-      item.style.width = `${size.width}px`;
-      item.style.height = `${size.height}px`;
-      item.dataset.targetWidth = String(size.width);
+      item.dataset.activeMode = activeMode;
+      item.dataset.isCenter = isCenter ? '1' : '0';
 
       const mediaSlot = document.createElement('div');
       mediaSlot.className = 'spine-media-slot';
-      mediaSlot.style.width = '100%';
-      mediaSlot.style.height = '100%';
       mediaSlot.appendChild(createCoverOrSpineNode(book, activeMode));
+      applySpineItemSize(item, mediaSlot, book, activeMode, isCenter);
 
       const switcher = createCoverSwitcherNode(centerMode);
       item.append(mediaSlot, switcher);
@@ -1298,11 +1347,9 @@
           e.stopPropagation();
           const type = btn.dataset.cardCover;
           state.carouselCoverMode = type;
+          item.dataset.activeMode = type;
           mediaSlot.replaceChildren(createCoverOrSpineNode(book, type));
-          const nextSize = computeCarouselItemSize(book, type, true);
-          item.style.width = `${nextSize.width}px`;
-          item.style.height = `${nextSize.height}px`;
-          item.dataset.targetWidth = String(nextSize.width);
+          applySpineItemSize(item, mediaSlot, book, type, true);
           switcher.querySelectorAll('.mini-cover-btn').forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
           centerActiveSpineItem();
@@ -1326,26 +1373,40 @@
     requestAnimationFrame(centerActiveSpineItem);
   }
 
-  function updateSpineCarouselSelection() {
+  function preloadAdjacentCovers() {
+    for (const offset of [-1, 1]) {
+      const neighbor = state.filteredBooks[state.carouselIndex + offset];
+      const url = neighbor && neighbor.covers && neighbor.covers.c1;
+      if (url) {
+        const pre = new Image();
+        pre.decoding = 'async';
+        pre.src = url;
+      }
+    }
+  }
+
+  function updateSpineCarouselSelection(forceResize = false) {
     const items = el.spineTrack.querySelectorAll('.spine-item');
     items.forEach((item, idx) => {
       const book = state.filteredBooks[idx];
       if (!book) return;
       const isCenter = idx === state.carouselIndex;
+      const wasCenter = item.dataset.isCenter === '1';
       item.classList.toggle('active', isCenter);
 
       const mediaSlot = item.querySelector('.spine-media-slot');
       const centerMode = state.carouselCoverMode || 'c1';
       const activeMode = isCenter ? centerMode : 'c2';
+      const modeChanged = item.dataset.activeMode !== activeMode;
 
-      const size = computeCarouselItemSize(book, activeMode, isCenter);
-      item.style.width = `${size.width}px`;
-      item.style.height = `${size.height}px`;
-      item.dataset.targetWidth = String(size.width);
-
-      if (mediaSlot) {
+      if (modeChanged && mediaSlot) {
         mediaSlot.replaceChildren(createCoverOrSpineNode(book, activeMode));
       }
+      if (forceResize || modeChanged || wasCenter !== isCenter) {
+        applySpineItemSize(item, mediaSlot, book, activeMode, isCenter);
+      }
+      item.dataset.activeMode = activeMode;
+      item.dataset.isCenter = isCenter ? '1' : '0';
 
       if (isCenter) {
         item.querySelectorAll('.mini-cover-btn').forEach((btn) => {
@@ -1356,6 +1417,7 @@
 
     updateSpineCarouselFooter();
     centerActiveSpineItem();
+    preloadAdjacentCovers();
   }
 
   function centerActiveSpineItem() {
@@ -2764,7 +2826,7 @@
 
   window.addEventListener('resize', () => {
     if (state.preferences.shelfView === 'spine' && !state.activeBook) {
-      updateSpineCarouselSelection();
+      updateSpineCarouselSelection(true);
     }
   });
 
@@ -2800,6 +2862,8 @@
       let successCount = 0;
       for (const file of files) {
         try {
+          const isZip = file.name.toLowerCase().endsWith('.zip');
+          const endpoint = isZip ? '/api/upload-book-zip' : '/api/upload-ebook';
           const uploadFile = async (overwrite = false) => {
             const headers = {
               'Content-Type': 'application/octet-stream',
@@ -2807,7 +2871,7 @@
               'X-Filename': encodeURIComponent(file.name)
             };
             if (overwrite) headers['X-Overwrite'] = 'true';
-            return fetch('/api/upload-ebook', {
+            return fetch(endpoint, {
               method: 'POST',
               credentials: 'same-origin',
               headers,
@@ -2837,7 +2901,7 @@
 
       el.inputUploadEbook.value = '';
       if (successCount > 0) {
-        el.ebookUploadStatus.textContent = `Lastet opp ${successCount} e-bok/PDF! Oppdaterer biblioteket...`;
+        el.ebookUploadStatus.textContent = `Lastet opp ${successCount} bok/bøker! Oppdaterer biblioteket...`;
         el.ebookUploadStatus.style.color = 'var(--accent)';
         await Promise.all([loadLibrary(), refreshAdminOverview()]);
         el.ebookUploadStatus.textContent = `Ferdig! ${successCount} bok/bøker lagt til i biblioteket.`;

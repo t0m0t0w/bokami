@@ -888,6 +888,11 @@ function isValidImageBuffer(buf) {
   if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') {
     return true;
   }
+  // AVIF (ISO Base Media File Format: ....ftypavif / ftypavis)
+  if (buf.subarray(4, 8).toString('ascii') === 'ftyp') {
+    const brand = buf.subarray(8, 12).toString('ascii');
+    if (brand === 'avif' || brand === 'avis' || brand === 'mif1') return true;
+  }
   return false;
 }
 
@@ -2205,7 +2210,7 @@ function streamBinaryUploadToFile(req, tmpPath, ext, maxBytes) {
       if (ext === '.pdf') {
         return buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-';
       }
-      if (ext === '.epub') {
+      if (ext === '.epub' || ext === '.zip') {
         return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
       }
       return false;
@@ -2217,7 +2222,7 @@ function streamBinaryUploadToFile(req, tmpPath, ext, maxBytes) {
       if (settled) return;
       totalBytes += chunk.length;
       if (totalBytes > maxBytes) {
-        fail(413, 'Filen er for stor (maks 100 MB)');
+        fail(413, `Filen er for stor (maks ${Math.round(maxBytes / (1024 * 1024))} MB)`);
         return;
       }
       if (!headerChecked) {
@@ -2395,7 +2400,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (pathname.startsWith('/api/')) {
         const contentType = String(req.headers['content-type'] || '').toLowerCase();
-        if (pathname === '/api/upload-ebook' && req.method === 'POST') {
+        if ((pathname === '/api/upload-ebook' || pathname === '/api/upload-book-zip') && req.method === 'POST') {
           if (!contentType.startsWith('application/octet-stream') || req.headers['x-requested-with'] !== 'fetch') {
             return sendJson(res, 415, { error: 'Forventet application/octet-stream' });
           }
@@ -3181,6 +3186,238 @@ const server = http.createServer(async (req, res) => {
 
       fs.renameSync(tmpPath, targetPath);
       return sendJson(res, 200, { ok: true, id: rawName });
+    }
+
+    // API (Admin-only): Stream-upload a .zip image book and extract validated images into a book folder
+    if (pathname === '/api/upload-book-zip' && req.method === 'POST') {
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+      const rawHeaderName = safeDecodeURIComponent(String(req.headers['x-filename'] || ''));
+      const rawName = rawHeaderName ? path.basename(rawHeaderName.trim()) : '';
+      if (!isValidBookId(rawName) || path.extname(rawName).toLowerCase() !== '.zip') {
+        return sendJson(res, 400, { error: 'Ugyldig .zip-filnavn' });
+      }
+
+      const rawBookName = safeDecodeURIComponent(String(req.headers['x-book-name'] || ''));
+      const folderName = (rawBookName ? path.basename(rawBookName.trim()) : path.parse(rawName).name).trim();
+      if (!isValidBookId(folderName)) {
+        return sendJson(res, 400, { error: 'Ugyldig boknavn for mappe' });
+      }
+
+      const config = getRuntimeConfig();
+      if (!fs.existsSync(config.booksDir) || !fs.statSync(config.booksDir).isDirectory()) {
+        return sendJson(res, 500, { error: 'Bokmappen er ikke tilgjengelig' });
+      }
+
+      const targetDir = path.join(config.booksDir, folderName);
+      if (!isPathInsideDir(config.booksDir, targetDir, { allowMissingLeaf: true })) {
+        return sendJson(res, 400, { error: 'Ugyldig mappeplassering' });
+      }
+
+      const overwrite = req.headers['x-overwrite'] === 'true';
+      if (fs.existsSync(targetDir) && !overwrite) {
+        return sendJson(res, 409, { error: `En bok med navnet "${folderName}" finnes allerede` });
+      }
+
+      const rand = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      const tmpZipPath = path.join(config.booksDir, `.upload-zip-${rand}.tmp`);
+      const stagingDir = path.join(config.booksDir, `.staging-book-${rand}`);
+      const MAX_ZIP_UPLOAD_BYTES = 250 * 1024 * 1024;
+
+      let fd = null;
+      try {
+        await streamBinaryUploadToFile(req, tmpZipPath, '.zip', MAX_ZIP_UPLOAD_BYTES);
+
+        const stat = fs.statSync(tmpZipPath);
+        fd = fs.openSync(tmpZipPath, 'r');
+
+        // Locate EOCD in last 65558 bytes
+        const tailLen = Math.min(stat.size, 65558);
+        const tailBuf = Buffer.alloc(tailLen);
+        fs.readSync(fd, tailBuf, 0, tailLen, stat.size - tailLen);
+        let eocdOffset = -1;
+        for (let i = tailLen - 22; i >= 0; i--) {
+          if (tailBuf.readUInt32LE(i) === 0x06054b50) {
+            eocdOffset = i;
+            break;
+          }
+        }
+        if (eocdOffset === -1) {
+          throw new HttpError(400, 'Ugyldig eller skadet ZIP-fil');
+        }
+
+        const cdCount = Math.min(MAX_ZIP_ENTRIES, tailBuf.readUInt16LE(eocdOffset + 10));
+        const cdSize = tailBuf.readUInt32LE(eocdOffset + 12);
+        const cdOffset = tailBuf.readUInt32LE(eocdOffset + 16);
+        if (cdSize > 20 * 1024 * 1024 || cdOffset + cdSize > stat.size) {
+          throw new HttpError(400, 'Ugyldig ZIP-katalog');
+        }
+
+        const cdBuf = Buffer.alloc(cdSize);
+        fs.readSync(fd, cdBuf, 0, cdSize, cdOffset);
+
+        const candidates = [];
+        let ptr = 0;
+        for (let i = 0; i < cdCount && ptr + 46 <= cdBuf.length; i++) {
+          if (cdBuf.readUInt32LE(ptr) !== 0x02014b50) break;
+          const method = cdBuf.readUInt16LE(ptr + 10);
+          const compSize = cdBuf.readUInt32LE(ptr + 20);
+          const uncompSize = cdBuf.readUInt32LE(ptr + 24);
+          const nameLen = cdBuf.readUInt16LE(ptr + 28);
+          const extraLen = cdBuf.readUInt16LE(ptr + 30);
+          const commentLen = cdBuf.readUInt16LE(ptr + 32);
+          const localHeaderOffset = cdBuf.readUInt32LE(ptr + 42);
+          if (ptr + 46 + nameLen > cdBuf.length) break;
+
+          const rawEntryName = cdBuf
+            .subarray(ptr + 46, ptr + 46 + nameLen)
+            .toString('utf8')
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+          ptr += 46 + nameLen + extraLen + commentLen;
+
+          if (!rawEntryName || rawEntryName.endsWith('/')) continue;
+          if (rawEntryName.includes('\0')) continue;
+          const segs = rawEntryName.split('/').filter(Boolean);
+          if (segs.length === 0 || segs.some((s) => s === '.' || s === '..')) continue;
+          if (segs[0] === '__MACOSX') continue;
+          const base = segs[segs.length - 1];
+          if (base.startsWith('.') || base.toLowerCase() === 'thumbs.db' || base.toLowerCase() === 'desktop.ini') {
+            continue;
+          }
+
+          const ext = path.extname(base).toLowerCase();
+          if (!IMAGE_EXTENSIONS.has(ext)) continue;
+
+          candidates.push({
+            segs,
+            method,
+            compSize,
+            uncompSize,
+            localHeaderOffset
+          });
+        }
+
+        if (candidates.length === 0) {
+          throw new HttpError(400, 'Fant ingen bildefiler (.jpg, .png, .webp, .avif) i ZIP-filen');
+        }
+
+        // Strip single common wrapper folder if all images share it (e.g. "Min Bok/0001.jpg")
+        const firstSeg = candidates[0].segs.length > 1 ? candidates[0].segs[0] : null;
+        const stripTop = Boolean(firstSeg && candidates.every((c) => c.segs.length > 1 && c.segs[0] === firstSeg));
+
+        fs.mkdirSync(stagingDir, { recursive: true });
+        const MAX_IMAGE_ENTRY_BYTES = 25 * 1024 * 1024;
+        const MAX_TOTAL_EXTRACTED_BYTES = 300 * 1024 * 1024;
+        let totalExtracted = 0;
+        let savedCount = 0;
+        const usedNames = new Set();
+
+        for (const item of candidates) {
+          if (item.compSize > MAX_IMAGE_ENTRY_BYTES || item.uncompSize > MAX_IMAGE_ENTRY_BYTES) {
+            throw new HttpError(400, 'En bildefil i ZIP-arkivet er for stor (maks 25 MB per side)');
+          }
+          if (item.localHeaderOffset < 0 || item.localHeaderOffset + 30 > stat.size) {
+            throw new HttpError(400, 'Ugyldig ZIP-entry');
+          }
+          const lh = Buffer.alloc(30);
+          fs.readSync(fd, lh, 0, 30, item.localHeaderOffset);
+          if (lh.readUInt32LE(0) !== 0x04034b50) {
+            throw new HttpError(400, 'Skadet ZIP-header');
+          }
+          const lNameLen = lh.readUInt16LE(26);
+          const lExtraLen = lh.readUInt16LE(28);
+          const dataStart = item.localHeaderOffset + 30 + lNameLen + lExtraLen;
+          if (dataStart < 0 || dataStart + item.compSize > stat.size) {
+            throw new HttpError(400, 'Ugyldig ZIP-datarekkevidde');
+          }
+
+          const compBuf = Buffer.alloc(item.compSize);
+          fs.readSync(fd, compBuf, 0, item.compSize, dataStart);
+
+          let imgBuf;
+          if (item.method === 0) {
+            imgBuf = compBuf;
+          } else if (item.method === 8) {
+            try {
+              imgBuf = zlib.inflateRawSync(compBuf, { maxOutputLength: MAX_IMAGE_ENTRY_BYTES });
+            } catch {
+              throw new HttpError(400, 'Kunne ikke pakke ut bilde fra ZIP (for stort eller skadet)');
+            }
+          } else {
+            throw new HttpError(400, 'ZIP-komprimeringsmetode ikke støttet (bruk standard DEFLATE/STORE)');
+          }
+
+          totalExtracted += imgBuf.length;
+          if (totalExtracted > MAX_TOTAL_EXTRACTED_BYTES) {
+            throw new HttpError(413, 'Utpakket bok er for stor (maks 300 MB)');
+          }
+          if (!isValidImageBuffer(imgBuf)) {
+            throw new HttpError(400, 'ZIP inneholder en ugyldig eller skadet bildefil');
+          }
+
+          const relSegs = stripTop ? item.segs.slice(1) : item.segs;
+          let flatName = relSegs.join('_').replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_');
+          if (!isValidBookId(flatName)) {
+            flatName = `page_${String(savedCount + 1).padStart(4, '0')}${path.extname(relSegs[relSegs.length - 1]).toLowerCase()}`;
+          }
+          while (usedNames.has(flatName.toLowerCase())) {
+            const p = path.parse(flatName);
+            flatName = `${p.name}_${savedCount + 1}${p.ext}`;
+          }
+          usedNames.add(flatName.toLowerCase());
+
+          const outFile = path.join(stagingDir, flatName);
+          if (!isPathInsideDir(stagingDir, outFile, { allowMissingLeaf: true })) {
+            throw new HttpError(400, 'Ugyldig filsti i ZIP');
+          }
+          fs.writeFileSync(outFile, imgBuf);
+          savedCount++;
+        }
+
+        fs.closeSync(fd);
+        fd = null;
+
+        if (fs.existsSync(targetDir)) {
+          if (!overwrite) {
+            throw new HttpError(409, `En bok med navnet "${folderName}" finnes allerede`);
+          }
+          const backupDir = path.join(config.booksDir, `.backup-book-${rand}`);
+          fs.renameSync(targetDir, backupDir);
+          try {
+            fs.renameSync(stagingDir, targetDir);
+            fs.rmSync(backupDir, { recursive: true, force: true });
+          } catch (moveErr) {
+            if (!fs.existsSync(targetDir) && fs.existsSync(backupDir)) {
+              fs.renameSync(backupDir, targetDir);
+            }
+            throw moveErr;
+          }
+        } else {
+          fs.renameSync(stagingDir, targetDir);
+        }
+
+        return sendJson(res, 200, { ok: true, id: folderName, pageCount: savedCount });
+      } finally {
+        if (fd !== null) {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          if (fs.existsSync(tmpZipPath)) fs.unlinkSync(tmpZipPath);
+        } catch {
+          // ignore
+        }
+        try {
+          if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
     }
 
     // API (Admin-only): Shared Book Metadata (title, adminOnly, forsatsAlene, sizeScale & chapters)
