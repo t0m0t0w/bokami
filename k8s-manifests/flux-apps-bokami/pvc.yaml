@@ -1,30 +1,33 @@
-# Persistent storage for Bokami (Longhorn)
-# bokami-data: Konfigurasjon, profiler, bokmerker og lese-progresjon (~2GiB)
+# Persistent lagring for Bokami på Rook Ceph (RF2, reclaimPolicy: Retain, allowVolumeExpansion: true)
+# bokami-data-ceph: Konfigurasjon, profiler, sesjoner, bokmerker og omslags-cache (liten, latensfølsom -> nvme-rbd)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: bokami-data
+  name: bokami-data-ceph
   labels:
     app.kubernetes.io/name: bokami
+    app.kubernetes.io/instance: bokami
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: bokami
+  storageClassName: nvme-rbd
   resources:
     requests:
       storage: 2Gi
 ---
-# bokami-books: Bøkene (bildefilene) (20-50GiB etter behov)
+# bokami-books-ceph: Bøker (bildeserier, PDF og EPUB) på CephFS (fast-fs, ReadWriteMany)
+# Kan monteres direkte med scripts/mount-cephfs.py --pvc bokami-books-ceph -n bokami
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: bokami-books
+  name: bokami-books-ceph
   labels:
     app.kubernetes.io/name: bokami
+    app.kubernetes.io/instance: bokami
 spec:
   accessModes:
-    - ReadWriteOnce
-  storageClassName: bokami
+    - ReadWriteMany
+  storageClassName: fast-fs
   resources:
     requests:
       storage: 20Gi

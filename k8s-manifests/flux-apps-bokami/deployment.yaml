@@ -7,7 +7,8 @@ metadata:
     app.kubernetes.io/instance: bokami
 spec:
   replicas: 1
-  # RWO volumes: Unngå to samtidige pods ved rullende oppdatering
+  revisionHistoryLimit: 3
+  # bokami-data-ceph er RWO: Unngå to samtidige pods ved rullende oppdatering
   strategy:
     type: Recreate
   selector:
@@ -41,6 +42,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
+            - name: TZ
+              value: Europe/Oslo
             - name: PORT
               value: "3000"
             - name: DATA_DIR
@@ -49,17 +52,20 @@ spec:
               value: "/app/books"
             - name: TRUST_PROXY
               value: "true"
-            # Anbefalt: sett leser- og admin-passord via Kubernetes Secret ("bokami-secrets")
-            # - name: BOKAMI_PASSWORD
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: bokami-secrets
-            #       key: reader-password
-            # - name: BOKAMI_ADMIN_PASSWORD
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: bokami-secrets
-            #       key: admin-password
+            # Valgfri Kubernetes Secret ("bokami-secrets") for faste passord.
+            # Hvis Secreten mangler, bruker Bokami config.json / autogenererte passord.
+            - name: BOKAMI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bokami-secrets
+                  key: reader-password
+                  optional: true
+            - name: BOKAMI_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bokami-secrets
+                  key: admin-password
+                  optional: true
           ports:
             - name: http
               containerPort: 3000
@@ -81,10 +87,9 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 64Mi
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
           volumeMounts:
             - name: data
               mountPath: /app/data
@@ -95,9 +100,9 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: bokami-data
+            claimName: bokami-data-ceph
         - name: books
           persistentVolumeClaim:
-            claimName: bokami-books
+            claimName: bokami-books-ceph
         - name: tmp
           emptyDir: {}

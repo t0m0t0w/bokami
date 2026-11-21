@@ -1,4 +1,4 @@
-# Bokami - Flux Kustomization for Glemmen Fleet
+# Bokami - Flux Kustomization for Glemmen Fleet (Rook Ceph nvme-rbd + CephFS fast-fs)
 # Plasseres i: flux/clusters/glemmen/apps/bokami.yaml
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -14,6 +14,7 @@ spec:
   targetNamespace: bokami
   dependsOn:
     - name: infrastructure
+    - name: rook-ceph
   sourceRef:
     kind: GitRepository
     name: flux-system

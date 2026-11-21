@@ -86,6 +86,7 @@ function isValidBookId(bookId) {
   if (typeof bookId !== 'string') return false;
   if (!bookId || bookId.length > 200) return false;
   if (bookId === '.' || bookId === '..') return false;
+  if (bookId === 'lost+found') return false;
   if (FORBIDDEN_KEYS.has(bookId)) return false;
   if (bookId.startsWith('.')) return false;
   if (bookId.includes('/') || bookId.includes('\\') || bookId.includes('\0')) return false;
@@ -3752,3 +3753,18 @@ server.listen(PORT, '0.0.0.0', () => {
   }
   console.log('==================================================');
 });
+
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Mottok ${signal}, avslutter Bokami pent...`);
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => {
+    process.exit(0);
+  }, 5000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

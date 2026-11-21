@@ -1,7 +1,17 @@
+# Bokami - digital bokhylle og bokleser (https://bokami.glem.men).
+#
+# Valgfri Secret for faste passord (opprettes manuelt i klusteret, aldri i Git):
+#
+#   kubectl -n bokami create secret generic bokami-secrets \
+#     --from-literal=reader-password='...' \
+#     --from-literal=admin-password='...'
+#
+# Uten denne Secreten genererer Bokami tilfeldige passord ved første oppstart
+# og skriver dem til container-loggen (kubectl -n bokami logs deploy/bokami).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: bokami
 resources:
-  - storageclass.yaml
   - pvc.yaml
   - deployment.yaml
   - service.yaml
