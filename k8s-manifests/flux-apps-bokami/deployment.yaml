@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/name: bokami
         app.kubernetes.io/instance: bokami
     spec:
+      automountServiceAccountToken: false
       # Kjør sikkert som standard node-bruker (uid 1000)
       securityContext:
         runAsUser: 1000
@@ -36,6 +37,7 @@ spec:
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           env:
@@ -45,9 +47,19 @@ spec:
               value: "/app/data"
             - name: BOOKS_DIR
               value: "/app/books"
-            # Valgfritt: overstyr standardpassordet ("passord") – helst via Kubernetes Secret
+            - name: TRUST_PROXY
+              value: "true"
+            # Anbefalt: sett leser- og admin-passord via Kubernetes Secret ("bokami-secrets")
             # - name: BOKAMI_PASSWORD
-            #   value: "ditt-passord"
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: bokami-secrets
+            #       key: reader-password
+            # - name: BOKAMI_ADMIN_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: bokami-secrets
+            #       key: admin-password
           ports:
             - name: http
               containerPort: 3000
@@ -78,6 +90,8 @@ spec:
               mountPath: /app/data
             - name: books
               mountPath: /app/books
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -85,3 +99,5 @@ spec:
         - name: books
           persistentVolumeClaim:
             claimName: bokami-books
+        - name: tmp
+          emptyDir: {}

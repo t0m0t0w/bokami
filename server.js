@@ -10,9 +10,11 @@ const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT_DIR, 'data');
 const DEFAULT_BOOKS_DIR = process.env.BOOKS_DIR ? path.resolve(process.env.BOOKS_DIR) : path.join(ROOT_DIR, 'books');
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const PROFILES_FILE = path.join(DATA_DIR, 'profiles.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const LEGACY_USERDATA_FILE = path.join(DATA_DIR, 'userdata.json');
 const BOOKMETA_FALLBACK_FILE = path.join(DATA_DIR, 'bookmeta.json');
 const COVERS_CACHE_DIR = path.join(DATA_DIR, 'covers');
@@ -24,7 +26,96 @@ if (!fs.existsSync(DEFAULT_BOOKS_DIR)) fs.mkdirSync(DEFAULT_BOOKS_DIR, { recursi
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.avif']);
 const EBOOK_EXTENSIONS = new Set(['.pdf', '.epub']);
+const EPUB_SAFE_ASSET_EXTS = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif',
+  '.woff', '.woff2', '.ttf', '.otf'
+]);
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const ALLOWED_PREF_KEYS = new Set([
+  'shelfView',
+  'gridCoverMode',
+  'readerMode',
+  'fitMode',
+  'spreadCoverSolo'
+]);
+
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const MAX_SESSIONS = 500;
+const MAX_PROFILES = 50;
+const MAX_AVATAR_LEN = 250_000;
+const MAX_CACHE_ENTRIES = 200;
+const MAX_EPUB_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 5000;
+const MAX_ZIP_ENTRY_BYTES = 10 * 1024 * 1024;
+const MAX_COVER_BYTES = 5 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_EXPORT_BYTES = 150 * 1024 * 1024;
+const MAX_CONCURRENT_EXPORTS = 2;
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT_MAX_ATTEMPTS = 10;
+
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+let activeExports = 0;
+
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+function setBoundedCache(map, key, val, max = MAX_CACHE_ENTRIES) {
+  if (map.has(key)) {
+    map.delete(key);
+  } else if (map.size >= max) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey !== undefined) map.delete(oldestKey);
+  }
+  map.set(key, val);
+}
+
+function safeDecodeURIComponent(str) {
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return null;
+  }
+}
+
+function isValidBookId(bookId) {
+  if (typeof bookId !== 'string') return false;
+  if (!bookId || bookId.length > 200) return false;
+  if (bookId === '.' || bookId === '..') return false;
+  if (FORBIDDEN_KEYS.has(bookId)) return false;
+  if (bookId.startsWith('.')) return false;
+  if (bookId.includes('/') || bookId.includes('\\') || bookId.includes('\0')) return false;
+  if (path.basename(bookId) !== bookId) return false;
+  return true;
+}
+
+function isPathInsideDir(baseDir, targetPath, { allowMissingLeaf = false } = {}) {
+  try {
+    const realBase = fs.realpathSync(baseDir);
+    const prefix = realBase.endsWith(path.sep) ? realBase : realBase + path.sep;
+    let realTarget;
+    if (fs.existsSync(targetPath)) {
+      realTarget = fs.realpathSync(targetPath);
+    } else if (allowMissingLeaf) {
+      const parent = path.dirname(targetPath);
+      if (!fs.existsSync(parent)) return false;
+      const realParent = fs.realpathSync(parent);
+      if (realParent !== realBase && !realParent.startsWith(prefix)) {
+        return false;
+      }
+      realTarget = path.join(realParent, path.basename(targetPath));
+    } else {
+      return false;
+    }
+    return realTarget.startsWith(prefix);
+  } catch {
+    return false;
+  }
+}
 
 function loadJson(filePath, fallback) {
   try {
@@ -39,78 +130,519 @@ function loadJson(filePath, fallback) {
 }
 
 function saveJson(filePath, data) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmpPath, filePath);
     return true;
   } catch (err) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore cleanup error
+    }
     console.error(`Feil ved lagring av ${filePath}:`, err.message);
     return false;
   }
 }
 
-function getConfig() {
-  const envPassword =
-    typeof process.env.BOKAMI_PASSWORD === 'string'
-      ? process.env.BOKAMI_PASSWORD
-      : typeof process.env.PASSWORD === 'string'
-        ? process.env.PASSWORD
-        : null;
-  const defaultConfig = {
-    booksDir: DEFAULT_BOOKS_DIR,
-    password: envPassword !== null ? envPassword : 'passord'
-  };
-  const loaded = loadJson(CONFIG_FILE, defaultConfig);
+// ==================== PASSWORD HASHING & CONFIG ====================
+function hashPassword(plain) {
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(String(plain), salt, 64);
+  return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
+}
+
+function verifyPassword(plain, storedHash) {
+  if (typeof plain !== 'string' || typeof storedHash !== 'string' || !plain) return false;
+  const parts = storedHash.split('$');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  try {
+    const salt = Buffer.from(parts[1], 'hex');
+    const expected = Buffer.from(parts[2], 'hex');
+    if (salt.length !== 16 || expected.length !== 64) return false;
+    const actual = crypto.scryptSync(plain, salt, 64);
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function timingSafeStringEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
+
+function getEnvPassword(primaryName, fallbackName = null) {
+  const v1 = process.env[primaryName];
+  if (typeof v1 === 'string' && v1.length > 0) return v1;
+  if (fallbackName) {
+    const v2 = process.env[fallbackName];
+    if (typeof v2 === 'string' && v2.length > 0) return v2;
+  }
+  return null;
+}
+
+const startupNotices = {
+  generatedReaderPassword: null,
+  generatedAdminPassword: null,
+  defaultReaderPasswordWarning: false
+};
+
+function initConfig() {
+  const loaded = loadJson(CONFIG_FILE, {});
+  const config = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? { ...loaded } : {};
+  let changed = false;
+
+  if (typeof config.booksDir !== 'string' || !config.booksDir.trim()) {
+    config.booksDir = DEFAULT_BOOKS_DIR;
+    changed = true;
+  }
+
+  // Migrate legacy plaintext config.password -> scrypt passwordHash
+  if (typeof config.password === 'string') {
+    if (config.password.length > 0 && !config.passwordHash) {
+      if (config.password === 'passord') {
+        startupNotices.defaultReaderPasswordWarning = true;
+      }
+      config.passwordHash = hashPassword(config.password);
+    }
+    delete config.password;
+    changed = true;
+  }
+
+  const envReader = getEnvPassword('BOKAMI_PASSWORD', 'PASSWORD');
+  if (!envReader && (typeof config.passwordHash !== 'string' || !config.passwordHash.startsWith('scrypt$'))) {
+    const genReader = crypto.randomBytes(9).toString('base64url'); // 12 chars
+    config.passwordHash = hashPassword(genReader);
+    startupNotices.generatedReaderPassword = genReader;
+    changed = true;
+  }
+
+  const envAdmin = getEnvPassword('BOKAMI_ADMIN_PASSWORD');
+  if (!envAdmin && (typeof config.adminPasswordHash !== 'string' || !config.adminPasswordHash.startsWith('scrypt$'))) {
+    const genAdmin = crypto.randomBytes(12).toString('base64url'); // 16 chars
+    config.adminPasswordHash = hashPassword(genAdmin);
+    startupNotices.generatedAdminPassword = genAdmin;
+    changed = true;
+  }
+
+  if (changed || !fs.existsSync(CONFIG_FILE)) {
+    saveJson(CONFIG_FILE, config);
+  }
+}
+
+initConfig();
+
+function getRuntimeConfig() {
+  const loaded = loadJson(CONFIG_FILE, {});
+  const envReaderPassword = getEnvPassword('BOKAMI_PASSWORD', 'PASSWORD');
+  const envAdminPassword = getEnvPassword('BOKAMI_ADMIN_PASSWORD');
+  const booksDir = process.env.BOOKS_DIR
+    ? path.resolve(process.env.BOOKS_DIR)
+    : typeof loaded.booksDir === 'string' && loaded.booksDir.trim()
+      ? path.resolve(loaded.booksDir.trim())
+      : DEFAULT_BOOKS_DIR;
+
   return {
-    ...defaultConfig,
-    ...loaded,
-    password:
-      envPassword !== null
-        ? envPassword
-        : typeof loaded.password === 'string'
-          ? loaded.password
-          : defaultConfig.password
+    booksDir,
+    envReaderPassword,
+    envAdminPassword,
+    passwordHash: typeof loaded.passwordHash === 'string' ? loaded.passwordHash : null,
+    adminPasswordHash: typeof loaded.adminPasswordHash === 'string' ? loaded.adminPasswordHash : null,
+    passwordLockedByEnv: Boolean(envReaderPassword),
+    adminPasswordLockedByEnv: Boolean(envAdminPassword)
   };
 }
 
-function makeAuthToken(password) {
-  return crypto.createHash('sha256').update(`bokami-auth:${password}`).digest('hex').slice(0, 32);
+function verifyReaderPassword(input) {
+  if (typeof input !== 'string' || !input) return false;
+  const cfg = getRuntimeConfig();
+  if (cfg.envReaderPassword) {
+    return timingSafeStringEqual(input, cfg.envReaderPassword);
+  }
+  return verifyPassword(input, cfg.passwordHash);
+}
+
+function verifyGlobalAdminPassword(input) {
+  if (typeof input !== 'string' || !input) return false;
+  const cfg = getRuntimeConfig();
+  if (cfg.envAdminPassword) {
+    return timingSafeStringEqual(input, cfg.envAdminPassword);
+  }
+  return verifyPassword(input, cfg.adminPasswordHash);
+}
+
+// ==================== SESSIONS, COOKIES & RATE LIMIT ====================
+const sessions = new Map();
+
+function loadSessions() {
+  const raw = loadJson(SESSIONS_FILE, { sessions: [] });
+  const now = Date.now();
+  let pruned = false;
+  if (raw && Array.isArray(raw.sessions)) {
+    for (const s of raw.sessions) {
+      if (
+        s &&
+        typeof s.id === 'string' &&
+        s.id.length >= 16 &&
+        typeof s.expiresAt === 'number' &&
+        s.expiresAt > now
+      ) {
+        sessions.set(s.id, {
+          id: s.id,
+          role: s.role === 'admin' ? 'admin' : 'user',
+          activeProfileId: typeof s.activeProfileId === 'string' ? s.activeProfileId : null,
+          createdAt: typeof s.createdAt === 'number' ? s.createdAt : now,
+          expiresAt: s.expiresAt
+        });
+      } else {
+        pruned = true;
+      }
+    }
+  }
+  if (pruned) persistSessions();
+}
+
+function persistSessions() {
+  saveJson(SESSIONS_FILE, { sessions: Array.from(sessions.values()) });
+}
+
+function pruneExpiredSessions() {
+  const now = Date.now();
+  let changed = false;
+  for (const [id, s] of sessions.entries()) {
+    if (!s || s.expiresAt <= now) {
+      sessions.delete(id);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function createSession(role = 'user', activeProfileId = null) {
+  pruneExpiredSessions();
+  while (sessions.size >= MAX_SESSIONS) {
+    const oldest = sessions.keys().next().value;
+    if (oldest === undefined) break;
+    sessions.delete(oldest);
+  }
+  const now = Date.now();
+  const id = crypto.randomBytes(32).toString('base64url');
+  const session = {
+    id,
+    role: role === 'admin' ? 'admin' : 'user',
+    activeProfileId: typeof activeProfileId === 'string' ? activeProfileId : null,
+    createdAt: now,
+    expiresAt: now + SESSION_TTL_MS
+  };
+  sessions.set(id, session);
+  persistSessions();
+  return session;
+}
+
+function rotateSession(oldSessionId, newRole, activeProfileId) {
+  if (oldSessionId) sessions.delete(oldSessionId);
+  return createSession(newRole, activeProfileId);
+}
+
+function deleteSession(sessionId) {
+  if (sessionId && sessions.delete(sessionId)) {
+    persistSessions();
+  }
+}
+
+loadSessions();
+
+function isSecureRequest(req) {
+  if (req.socket && req.socket.encrypted) return true;
+  if (TRUST_PROXY) {
+    const proto = String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    return proto === 'https';
+  }
+  return false;
+}
+
+function getSessionCookieName(req) {
+  return isSecureRequest(req) ? '__Host-bokami_session' : 'bokami_session';
+}
+
+function buildSessionSetCookie(req, sessionId) {
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+  if (isSecureRequest(req)) {
+    return `__Host-bokami_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAge}`;
+  }
+  return `bokami_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function buildClearSessionCookie(req) {
+  if (isSecureRequest(req)) {
+    return '__Host-bokami_session=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0';
+  }
+  return 'bokami_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
 }
 
 function parseCookies(req) {
-  const list = {};
+  const list = Object.create(null);
   const cookieHeader = req.headers.cookie;
-  if (!cookieHeader) return list;
+  if (!cookieHeader || typeof cookieHeader !== 'string') return list;
   cookieHeader.split(';').forEach((cookie) => {
-    const parts = cookie.split('=');
-    const key = parts.shift().trim();
-    const val = decodeURIComponent(parts.join('=').trim());
-    if (key) list[key] = val;
+    const eqIdx = cookie.indexOf('=');
+    if (eqIdx <= 0) return;
+    const key = cookie.slice(0, eqIdx).trim();
+    const rawVal = cookie.slice(eqIdx + 1).trim();
+    if (!key || FORBIDDEN_KEYS.has(key)) return;
+    try {
+      list[key] = decodeURIComponent(rawVal);
+    } catch {
+      list[key] = rawVal;
+    }
   });
   return list;
 }
 
-function isRequestAuthenticated(req, parsedUrl) {
-  const config = getConfig();
-  if (!config.password) return true;
-  const expected = makeAuthToken(config.password);
-  const headerToken = req.headers['x-auth-token'];
-  const queryToken = parsedUrl.searchParams.get('token');
+function getSessionFromRequest(req) {
   const cookies = parseCookies(req);
-  const cookieToken = cookies.bokami_token;
-  return headerToken === expected || queryToken === expected || cookieToken === expected;
+  const cookieName = getSessionCookieName(req);
+  const sessionId = cookies[cookieName];
+  if (!sessionId || typeof sessionId !== 'string') return null;
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(sessionId);
+    persistSessions();
+    return null;
+  }
+  return session;
 }
 
+// Rate limiter for auth endpoints
+const loginAttempts = new Map();
+
+function getClientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = req.headers['x-forwarded-for'];
+    if (typeof xff === 'string' && xff.trim()) {
+      return xff.split(',')[0].trim();
+    }
+  }
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  if (loginAttempts.size > 500) {
+    for (const [k, v] of loginAttempts.entries()) {
+      if (v.resetAt <= now) loginAttempts.delete(k);
+    }
+  }
+  const entry = loginAttempts.get(ip);
+  if (!entry) return { allowed: true };
+  if (entry.resetAt <= now) {
+    loginAttempts.delete(ip);
+    return { allowed: true };
+  }
+  if (entry.count >= RATE_LIMIT_MAX_ATTEMPTS) {
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) };
+  }
+  return { allowed: true };
+}
+
+function recordFailedAttempt(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    loginAttempts.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+  } else {
+    entry.count += 1;
+  }
+}
+
+function clearFailedAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
+// ==================== SECURITY HEADERS, FETCH METADATA & CSRF ====================
+const DEFAULT_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "worker-src 'self'",
+  "img-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'"
+].join('; ');
+
+function applySecurityHeaders(req, res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(), focus-without-user-activation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Vary', 'Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site');
+  res.setHeader('Content-Security-Policy', DEFAULT_CSP);
+  if (TRUST_PROXY && isSecureRequest(req)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=300');
+  }
+}
+
+function checkFetchMetadata(req, pathname) {
+  if (pathname === '/healthz') return true;
+  const site = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  if (!site) return true; // Non-browser / legacy client fallback
+  if (site === 'same-origin' || site === 'none') return true;
+
+  const mode = String(req.headers['sec-fetch-mode'] || '').trim().toLowerCase();
+  const dest = String(req.headers['sec-fetch-dest'] || '').trim().toLowerCase();
+
+  // Allow top-level page navigations only for app HTML (NOT API, media, or EPUB assets, and NOT same-site subresources)
+  if (
+    (site === 'cross-site' || site === 'same-site') &&
+    mode === 'navigate' &&
+    req.method === 'GET' &&
+    !['object', 'embed', 'iframe', 'frame'].includes(dest) &&
+    !pathname.startsWith('/api/') &&
+    !pathname.startsWith('/book-media/') &&
+    !pathname.startsWith('/epub-resource/')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function getExpectedOrigin(req) {
+  const rawHost = String(req.headers.host || '').trim();
+  if (!rawHost) return null;
+  const scheme = isSecureRequest(req) ? 'https' : 'http';
+  try {
+    const parsed = new URL(`${scheme}://${rawHost}`);
+    return parsed.origin !== 'null' ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSameOriginUrl(candidateUrl, expectedOrigin) {
+  if (!candidateUrl || !expectedOrigin) return false;
+  try {
+    const parsed = new URL(candidateUrl);
+    return parsed.origin !== 'null' && parsed.origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
+
+function checkOriginForMutation(req) {
+  const expectedOrigin = getExpectedOrigin(req);
+  const originHeader = req.headers.origin;
+  if (typeof originHeader === 'string') {
+    return isSameOriginUrl(originHeader, expectedOrigin);
+  }
+  const refererHeader = req.headers.referer;
+  if (typeof refererHeader === 'string') {
+    return isSameOriginUrl(refererHeader, expectedOrigin);
+  }
+  return true;
+}
+
+// ==================== PROFILES & ACCESS HELPERS ====================
 const DEFAULT_PREFERENCES = {
-  shelfView: 'grid',       // 'grid' | 'spine'
-  gridCoverMode: 'c1',     // 'c1' (Forsats) | 'c2' (Rygg) | 'c3' (Baksats)
-  readerMode: 'auto',      // 'auto' | 'spread' | 'single' | 'vertical'
-  fitMode: 'height'        // 'height' | 'width' | 'original'
+  shelfView: 'grid',
+  gridCoverMode: 'c1',
+  readerMode: 'auto',
+  fitMode: 'height',
+  spreadCoverSolo: true
 };
+
+const VALID_SHELF_VIEWS = new Set(['grid', 'spine']);
+const VALID_GRID_MODES = new Set(['c1', 'c2', 'c3']);
+const VALID_READER_MODES = new Set(['auto', 'single', 'spread', 'vertical']);
+const VALID_FIT_MODES = new Set(['height', 'width', 'original']);
+
+function sanitizePreferences(rawPrefs) {
+  const base = { ...DEFAULT_PREFERENCES };
+  if (!rawPrefs || typeof rawPrefs !== 'object') return base;
+  if (VALID_SHELF_VIEWS.has(rawPrefs.shelfView)) base.shelfView = rawPrefs.shelfView;
+  if (VALID_GRID_MODES.has(rawPrefs.gridCoverMode)) base.gridCoverMode = rawPrefs.gridCoverMode;
+  if (VALID_READER_MODES.has(rawPrefs.readerMode)) base.readerMode = rawPrefs.readerMode;
+  if (VALID_FIT_MODES.has(rawPrefs.fitMode)) base.fitMode = rawPrefs.fitMode;
+  if (typeof rawPrefs.spreadCoverSolo === 'boolean') base.spreadCoverSolo = rawPrefs.spreadCoverSolo;
+  return base;
+}
+
+function isValidAvatar(val) {
+  if (val === '') return true;
+  if (typeof val !== 'string' || val.length > MAX_AVATAR_LEN) return false;
+  return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(val);
+}
+
+function isValidHexColor(val) {
+  return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val);
+}
 
 function getProfilesData() {
   if (fs.existsSync(PROFILES_FILE)) {
     const data = loadJson(PROFILES_FILE, { profiles: [] });
     if (Array.isArray(data.profiles) && data.profiles.length > 0) {
+      let changed = false;
+      for (const p of data.profiles) {
+        if (!p || typeof p !== 'object') continue;
+        if (typeof p.isAdmin !== 'boolean') {
+          p.isAdmin = false;
+          changed = true;
+        }
+        if (p.adminPasswordHash !== null && (typeof p.adminPasswordHash !== 'string' || !p.adminPasswordHash.startsWith('scrypt$'))) {
+          p.adminPasswordHash = null;
+          changed = true;
+        }
+        const cleanHidden = Array.isArray(p.hiddenBooks)
+          ? [...new Set(p.hiddenBooks.filter(isValidBookId))]
+          : [];
+        if (!Array.isArray(p.hiddenBooks) || cleanHidden.length !== p.hiddenBooks.length) {
+          p.hiddenBooks = cleanHidden;
+          changed = true;
+        }
+        if (!isValidHexColor(p.color)) {
+          p.color = '#00A3FF';
+          changed = true;
+        }
+        if (!isValidAvatar(p.avatar || '')) {
+          p.avatar = '';
+          changed = true;
+        }
+        if (!p.progress || typeof p.progress !== 'object' || Array.isArray(p.progress)) {
+          p.progress = {};
+          changed = true;
+        }
+        if (!p.bookmarks || typeof p.bookmarks !== 'object' || Array.isArray(p.bookmarks)) {
+          p.bookmarks = {};
+          changed = true;
+        }
+        p.preferences = sanitizePreferences(p.preferences);
+      }
+
+      if (!data.profiles.some((p) => p.isAdmin)) {
+        const defaultAdmin = data.profiles.find((p) => p.id === 'main') || data.profiles[0];
+        if (defaultAdmin) {
+          defaultAdmin.isAdmin = true;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        saveJson(PROFILES_FILE, data);
+      }
       return data;
     }
   }
@@ -121,13 +653,13 @@ function getProfilesData() {
     name: 'Meg',
     avatar: '',
     color: '#00A3FF',
+    isAdmin: true,
+    adminPasswordHash: null,
+    hiddenBooks: [],
     createdAt: new Date().toISOString(),
     progress: legacy && legacy.progress ? legacy.progress : {},
     bookmarks: legacy && legacy.bookmarks ? legacy.bookmarks : {},
-    preferences: {
-      ...DEFAULT_PREFERENCES,
-      ...(legacy && legacy.preferences ? legacy.preferences : {})
-    }
+    preferences: sanitizePreferences(legacy && legacy.preferences)
   };
 
   const initialData = { profiles: [initialProfile] };
@@ -135,16 +667,73 @@ function getProfilesData() {
   return initialData;
 }
 
-function getProfileById(profileId) {
-  const data = getProfilesData();
-  let profile = data.profiles.find((p) => p.id === profileId);
-  if (!profile) {
-    profile = data.profiles[0];
+function sanitizeProfileSummary(p, includeAdminDetails = false) {
+  const bookmarkTotal = Object.values(p.bookmarks || {}).reduce(
+    (acc, arr) => acc + (Array.isArray(arr) ? arr.length : 0),
+    0
+  );
+  const readingCount = Object.keys(p.progress || {}).length;
+  const out = {
+    id: p.id,
+    name: p.name,
+    avatar: p.avatar || '',
+    color: isValidHexColor(p.color) ? p.color : '#00A3FF',
+    isAdmin: Boolean(p.isAdmin),
+    bookmarkTotal,
+    readingCount
+  };
+  if (includeAdminDetails) {
+    out.hiddenBooks = Array.isArray(p.hiddenBooks) ? p.hiddenBooks : [];
+    out.hasPersonalAdminPassword = Boolean(p.adminPasswordHash);
   }
+  return out;
+}
+
+function resolveRequestProfile(session, req, parsedUrl) {
+  const data = getProfilesData();
+  const requestedId =
+    (session && session.activeProfileId) ||
+    req.headers['x-profile-id'] ||
+    parsedUrl.searchParams.get('profileId') ||
+    null;
+
+  let profile = requestedId ? data.profiles.find((p) => p.id === requestedId) : null;
+  if (!profile) {
+    if (session && session.role === 'admin') {
+      profile = data.profiles[0];
+    } else {
+      profile = data.profiles.find((p) => !p.isAdmin) || data.profiles[0];
+    }
+  }
+
+  if (!profile) {
+    return { error: 404, message: 'Ingen profil funnet' };
+  }
+
+  if (profile.isAdmin && (!session || session.role !== 'admin')) {
+    return {
+      error: 403,
+      requireAdmin: true,
+      message: 'Admin-tilgang kreves for denne profilen'
+    };
+  }
+
   if (!profile.progress) profile.progress = {};
   if (!profile.bookmarks) profile.bookmarks = {};
-  profile.preferences = { ...DEFAULT_PREFERENCES, ...(profile.preferences || {}) };
+  if (!Array.isArray(profile.hiddenBooks)) profile.hiddenBooks = [];
+  profile.preferences = sanitizePreferences(profile.preferences);
+
   return { data, profile };
+}
+
+function isBookHiddenForProfile(session, profile, bookId, metaOrBook) {
+  if (metaOrBook && metaOrBook.adminOnly && (!session || session.role !== 'admin')) {
+    return true;
+  }
+  if (profile && Array.isArray(profile.hiddenBooks) && profile.hiddenBooks.includes(bookId)) {
+    return true;
+  }
+  return false;
 }
 
 function getLanAddresses() {
@@ -160,22 +749,30 @@ function getLanAddresses() {
   return results;
 }
 
+// ==================== BOOK METADATA ====================
 function loadBookMeta(booksDir, folderName) {
-  const fullPath = path.join(booksDir, folderName);
-  const isDir = fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory();
-  const bookJsonPath = isDir ? path.join(fullPath, 'book.json') : null;
-  const fallbackStore = loadJson(BOOKMETA_FALLBACK_FILE, {});
-  const fallbackMeta = fallbackStore[folderName] || {};
-
   const defaultMeta = {
+    title: '',
+    adminOnly: false,
     forsatsAlene: true,
     sizeScale: 1.0,
     pageCount: null,
     chapters: []
   };
+  if (!isValidBookId(folderName)) return defaultMeta;
+
+  const fullPath = path.join(booksDir, folderName);
+  const inside = isPathInsideDir(booksDir, fullPath);
+  const isDir = inside && fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory();
+  const bookJsonPath = isDir ? path.join(fullPath, 'book.json') : null;
+  const fallbackStore = loadJson(BOOKMETA_FALLBACK_FILE, {});
+  const fallbackMeta =
+    fallbackStore && typeof fallbackStore === 'object' && Object.hasOwn(fallbackStore, folderName)
+      ? fallbackStore[folderName] || {}
+      : {};
 
   let folderMeta = {};
-  if (bookJsonPath && fs.existsSync(bookJsonPath)) {
+  if (bookJsonPath && fs.existsSync(bookJsonPath) && isPathInsideDir(fullPath, bookJsonPath)) {
     folderMeta = loadJson(bookJsonPath, {});
   }
 
@@ -186,7 +783,21 @@ function loadBookMeta(booksDir, folderName) {
         ? fallbackMeta.sizeScale
         : defaultMeta.sizeScale;
 
+  const rawTitle =
+    typeof folderMeta.title === 'string'
+      ? folderMeta.title
+      : typeof fallbackMeta.title === 'string'
+        ? fallbackMeta.title
+        : '';
+
   const merged = {
+    title: rawTitle.trim().slice(0, 140),
+    adminOnly:
+      typeof folderMeta.adminOnly === 'boolean'
+        ? folderMeta.adminOnly
+        : typeof fallbackMeta.adminOnly === 'boolean'
+          ? fallbackMeta.adminOnly
+          : defaultMeta.adminOnly,
     forsatsAlene:
       typeof folderMeta.forsatsAlene === 'boolean'
         ? folderMeta.forsatsAlene
@@ -212,33 +823,71 @@ function loadBookMeta(booksDir, folderName) {
 }
 
 function saveBookMeta(booksDir, folderName, meta) {
-  const rawScale = typeof meta.sizeScale === 'number' ? meta.sizeScale : 1.0;
+  if (!isValidBookId(folderName)) {
+    throw new HttpError(400, 'Ugyldig bok-ID');
+  }
+  const rawScale = typeof meta.sizeScale === 'number' && Number.isFinite(meta.sizeScale) ? meta.sizeScale : 1.0;
+  const cleanTitle = typeof meta.title === 'string' ? meta.title.trim().slice(0, 140) : '';
   const cleanMeta = {
+    ...(cleanTitle ? { title: cleanTitle } : {}),
+    adminOnly: Boolean(meta.adminOnly),
     forsatsAlene: typeof meta.forsatsAlene === 'boolean' ? meta.forsatsAlene : true,
     sizeScale: Math.max(0.5, Math.min(1.5, Math.round(rawScale * 100) / 100)),
-    ...(typeof meta.pageCount === 'number' ? { pageCount: meta.pageCount } : {}),
+    ...(typeof meta.pageCount === 'number' && Number.isFinite(meta.pageCount) && meta.pageCount > 0
+      ? { pageCount: Math.min(20000, Math.round(meta.pageCount)) }
+      : {}),
     chapters: Array.isArray(meta.chapters)
       ? meta.chapters
+          .slice(0, 500)
+          .filter((ch) => ch && typeof ch === 'object')
           .map((ch) => ({
-            id: ch.id || `ch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            id: typeof ch.id === 'string' && ch.id ? ch.id.slice(0, 80) : `ch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             title: String(ch.title || 'Kapittel').trim().slice(0, 140),
             pageIndex: Math.max(0, parseInt(ch.pageIndex, 10) || 0),
-            pageFile: ch.pageFile || undefined
+            pageFile: typeof ch.pageFile === 'string' && isValidBookId(ch.pageFile) ? ch.pageFile : undefined
           }))
           .sort((a, b) => a.pageIndex - b.pageIndex)
       : []
   };
 
   const fullPath = path.join(booksDir, folderName);
-  const isDir = fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory();
-  const bookJsonPath = isDir ? path.join(fullPath, 'book.json') : path.join(DATA_DIR, 'bookmeta.json');
-  const wroteToFolder = isDir ? saveJson(bookJsonPath, cleanMeta) : false;
+  const inside = isPathInsideDir(booksDir, fullPath);
+  const isDir = inside && fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory();
+  const bookJsonPath = isDir ? path.join(fullPath, 'book.json') : null;
+  const wroteToFolder = isDir && isPathInsideDir(fullPath, bookJsonPath, { allowMissingLeaf: true })
+    ? saveJson(bookJsonPath, cleanMeta)
+    : false;
 
-  const fallbackStore = loadJson(BOOKMETA_FALLBACK_FILE, {});
+  const loadedFallback = loadJson(BOOKMETA_FALLBACK_FILE, {});
+  const fallbackStore = loadedFallback && typeof loadedFallback === 'object' && !Array.isArray(loadedFallback)
+    ? loadedFallback
+    : {};
   fallbackStore[folderName] = cleanMeta;
   saveJson(BOOKMETA_FALLBACK_FILE, fallbackStore);
 
-  return { meta: cleanMeta, wroteToFolder, bookJsonPath };
+  return { meta: cleanMeta, wroteToFolder };
+}
+
+// ==================== IMAGE & BINARY HELPERS ====================
+function isValidImageBuffer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return false;
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true;
+  // PNG
+  if (
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) return true;
+  // GIF
+  if (
+    buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38 &&
+    (buf[4] === 0x37 || buf[4] === 0x39) && buf[5] === 0x61
+  ) return true;
+  // WEBP
+  if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return true;
+  }
+  return false;
 }
 
 const imageDimCache = new Map();
@@ -258,7 +907,7 @@ function readImageDimensions(filePath) {
       const height = slice.readUInt32BE(20);
       if (width > 0 && height > 0) {
         const res = { width, height, ratio: Number((width / height).toFixed(4)) };
-        imageDimCache.set(filePath, res);
+        setBoundedCache(imageDimCache, filePath, res);
         return res;
       }
     }
@@ -272,7 +921,7 @@ function readImageDimensions(filePath) {
           height: info.height,
           ratio: Number((info.width / info.height).toFixed(4))
         };
-        imageDimCache.set(filePath, res);
+        setBoundedCache(imageDimCache, filePath, res);
         return res;
       }
     }
@@ -290,6 +939,10 @@ function safeCoverCachePath(bookId) {
 }
 
 function readZipArchive(zipFilePath) {
+  const stat = fs.statSync(zipFilePath);
+  if (!stat.isFile() || stat.size > MAX_EPUB_FILE_BYTES) {
+    throw new Error('EPUB-fil er for stor');
+  }
   const buf = fs.readFileSync(zipFilePath);
   let eocdOffset = -1;
   const minSearch = Math.max(0, buf.length - 65558);
@@ -301,8 +954,9 @@ function readZipArchive(zipFilePath) {
   }
   if (eocdOffset === -1) return new Map();
 
-  const cdCount = buf.readUInt16LE(eocdOffset + 10);
+  const cdCount = Math.min(MAX_ZIP_ENTRIES, buf.readUInt16LE(eocdOffset + 10));
   const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+  if (cdOffset >= buf.length) return new Map();
   const entries = new Map();
 
   let ptr = cdOffset;
@@ -315,6 +969,7 @@ function readZipArchive(zipFilePath) {
     const extraLen = buf.readUInt16LE(ptr + 30);
     const commentLen = buf.readUInt16LE(ptr + 32);
     const localHeaderOffset = buf.readUInt32LE(ptr + 42);
+    if (ptr + 46 + nameLen > buf.length) break;
     const name = buf.subarray(ptr + 46, ptr + 46 + nameLen).toString('utf8').replace(/\\/g, '/');
 
     entries.set(name, {
@@ -341,17 +996,23 @@ function readZipArchive(zipFilePath) {
       }
     }
     if (!info) return null;
+    if (info.compSize > MAX_ZIP_ENTRY_BYTES || info.uncompSize > MAX_ZIP_ENTRY_BYTES) {
+      return null;
+    }
 
     const lho = info.localHeaderOffset;
-    if (lho + 30 > buf.length || buf.readUInt32LE(lho) !== 0x04034b50) return null;
+    if (lho < 0 || lho + 30 > buf.length || buf.readUInt32LE(lho) !== 0x04034b50) return null;
     const lNameLen = buf.readUInt16LE(lho + 26);
     const lExtraLen = buf.readUInt16LE(lho + 28);
     const dataStart = lho + 30 + lNameLen + lExtraLen;
+    if (dataStart < 0 || dataStart + info.compSize > buf.length) return null;
     const compSlice = buf.subarray(dataStart, dataStart + info.compSize);
 
     try {
       if (info.method === 0) return Buffer.from(compSlice);
-      if (info.method === 8) return zlib.inflateRawSync(compSlice);
+      if (info.method === 8) {
+        return zlib.inflateRawSync(compSlice, { maxOutputLength: MAX_ZIP_ENTRY_BYTES });
+      }
     } catch {
       return null;
     }
@@ -368,8 +1029,242 @@ function decodeXmlEntities(str) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+    });
+}
+
+function escapeHtmlAttr(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+const EPUB_BLOCKED_CONTAINER_TAGS = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'svg', 'math',
+  'form', 'input', 'button', 'textarea', 'select', 'link', 'meta',
+  'base', 'template', 'noscript', 'applet', 'audio', 'video',
+  'source', 'canvas'
+]);
+
+const EPUB_ALLOWED_TAGS = new Set([
+  'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'div', 'span', 'blockquote', 'pre', 'code', 'em', 'strong', 'i', 'b', 'u', 's',
+  'sub', 'sup', 'small', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+  'figure', 'figcaption', 'img', 'a', 'section', 'article', 'aside',
+  'header', 'footer', 'nav', 'ruby', 'rt', 'rp'
+]);
+
+const EPUB_VOID_TAGS = new Set(['br', 'hr', 'img']);
+
+function parseHtmlAttributes(attrStr) {
+  const attrs = [];
+  let i = 0;
+  const len = attrStr.length;
+  while (i < len) {
+    while (i < len && /[\s/]/.test(attrStr[i])) i++;
+    if (i >= len) break;
+    const nameStart = i;
+    while (i < len && !/[\s=/>]/.test(attrStr[i])) i++;
+    const name = attrStr.slice(nameStart, i).toLowerCase();
+    if (!name) {
+      i++;
+      continue;
+    }
+    while (i < len && /\s/.test(attrStr[i])) i++;
+    let value = '';
+    if (i < len && attrStr[i] === '=') {
+      i++;
+      while (i < len && /\s/.test(attrStr[i])) i++;
+      if (i < len && (attrStr[i] === '"' || attrStr[i] === "'")) {
+        const quote = attrStr[i++];
+        const valStart = i;
+        while (i < len && attrStr[i] !== quote) i++;
+        value = attrStr.slice(valStart, i);
+        if (i < len && attrStr[i] === quote) i++;
+      } else {
+        const valStart = i;
+        while (i < len && !/[\s>]/.test(attrStr[i])) i++;
+        value = attrStr.slice(valStart, i);
+      }
+    }
+    attrs.push([name, value]);
+  }
+  return attrs;
+}
+
+function isSafeEpubHref(rawVal) {
+  const decoded = decodeXmlEntities(rawVal).replace(/[\u0000-\u0020]+/g, '').trim();
+  if (!decoded) return null;
+  if (decoded.startsWith('#')) return decoded;
+  try {
+    const u = new URL(decoded);
+    if (u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'mailto:') {
+      return decoded;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function sanitizeEpubHtml(html) {
+  const input = String(html || '');
+  const out = [];
+  const blockedStack = [];
+  let i = 0;
+  const len = input.length;
+
+  while (i < len) {
+    const lt = input.indexOf('<', i);
+    if (lt === -1) {
+      if (blockedStack.length === 0) {
+        out.push(input.slice(i));
+      }
+      break;
+    }
+
+    if (lt > i && blockedStack.length === 0) {
+      out.push(input.slice(i, lt));
+    }
+
+    // Comment <!-- ... -->
+    if (input.startsWith('<!--', lt)) {
+      const endComment = input.indexOf('-->', lt + 4);
+      i = endComment === -1 ? len : endComment + 3;
+      continue;
+    }
+
+    // Processing instruction / DOCTYPE / CDATA
+    if (input[lt + 1] === '!' || input[lt + 1] === '?') {
+      const gt = input.indexOf('>', lt + 2);
+      i = gt === -1 ? len : gt + 1;
+      continue;
+    }
+
+    // Scan tag end respecting quotes
+    let pos = lt + 1;
+    let quote = null;
+    while (pos < len) {
+      const ch = input[pos];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        break;
+      }
+      pos++;
+    }
+
+    if (pos >= len) {
+      if (blockedStack.length === 0) {
+        out.push('&lt;' + input.slice(lt + 1).replace(/</g, '&lt;'));
+      }
+      break;
+    }
+
+    const rawTag = input.slice(lt + 1, pos).trim();
+    i = pos + 1;
+
+    if (!rawTag) continue;
+    const isClose = rawTag.startsWith('/');
+    const body = isClose ? rawTag.slice(1).trim() : rawTag;
+    const tagMatch = body.match(/^([a-zA-Z][a-zA-Z0-9:-]*)/);
+    if (!tagMatch) {
+      if (blockedStack.length === 0) out.push('&lt;');
+      continue;
+    }
+
+    const tagName = tagMatch[1].toLowerCase();
+    const isSelfClosing = !isClose && body.endsWith('/');
+    const attrPart = isClose
+      ? ''
+      : body.slice(tagMatch[0].length, isSelfClosing ? body.length - 1 : body.length);
+
+    if (EPUB_BLOCKED_CONTAINER_TAGS.has(tagName)) {
+      if (isClose) {
+        const idx = blockedStack.lastIndexOf(tagName);
+        if (idx !== -1) blockedStack.splice(idx);
+      } else if (!isSelfClosing) {
+        blockedStack.push(tagName);
+      }
+      continue;
+    }
+
+    if (blockedStack.length > 0) {
+      continue;
+    }
+
+    if (!EPUB_ALLOWED_TAGS.has(tagName)) {
+      continue;
+    }
+
+    if (isClose) {
+      if (!EPUB_VOID_TAGS.has(tagName)) {
+        out.push(`</${tagName}>`);
+      }
+      continue;
+    }
+
+    const rawAttrs = parseHtmlAttributes(attrPart);
+    const safeAttrs = [];
+
+    if (tagName === 'img') {
+      for (const [k, v] of rawAttrs) {
+        if (k === 'src') {
+          const srcClean = decodeXmlEntities(v).trim();
+          if (srcClean.startsWith('/epub-resource/') && !/[\s\u0000-\u001f]/.test(srcClean)) {
+            safeAttrs.push(`src="${escapeHtmlAttr(srcClean)}"`);
+          }
+        } else if (k === 'alt') {
+          safeAttrs.push(`alt="${escapeHtmlAttr(decodeXmlEntities(v).slice(0, 300))}"`);
+        }
+      }
+    } else if (tagName === 'a') {
+      for (const [k, v] of rawAttrs) {
+        if (k === 'href') {
+          const safeHref = isSafeEpubHref(v);
+          if (safeHref) {
+            safeAttrs.push(`href="${escapeHtmlAttr(safeHref)}"`);
+            if (safeHref.startsWith('http://') || safeHref.startsWith('https://')) {
+              safeAttrs.push('rel="noopener noreferrer" target="_blank"');
+            }
+          }
+        } else if (k === 'data-epub-href') {
+          const cleanRef = decodeXmlEntities(v).trim();
+          if (cleanRef && !cleanRef.includes(':') && !/[\u0000-\u001f]/.test(cleanRef)) {
+            safeAttrs.push(`data-epub-href="${escapeHtmlAttr(cleanRef.slice(0, 300))}"`);
+          }
+        } else if (k === 'title') {
+          safeAttrs.push(`title="${escapeHtmlAttr(decodeXmlEntities(v).slice(0, 200))}"`);
+        }
+      }
+    } else if (tagName === 'td' || tagName === 'th') {
+      for (const [k, v] of rawAttrs) {
+        if (k === 'colspan' || k === 'rowspan') {
+          const num = parseInt(v, 10);
+          if (Number.isInteger(num) && num >= 1 && num <= 100) {
+            safeAttrs.push(`${k}="${num}"`);
+          }
+        }
+      }
+    }
+
+    const attrOut = safeAttrs.length > 0 ? ' ' + safeAttrs.join(' ') : '';
+    out.push(EPUB_VOID_TAGS.has(tagName) ? `<${tagName}${attrOut} />` : `<${tagName}${attrOut}>`);
+  }
+
+  return out.join('');
 }
 
 const epubCache = new Map();
@@ -413,7 +1308,7 @@ function parseEpubData(epubFilePath, bookId) {
     const opfXml = opfBuf.toString('utf8');
 
     const titleMatch = opfXml.match(/<dc:title[^>]*>([\s\S]*?)<\/dc:title>/i);
-    const epubTitle = titleMatch ? decodeXmlEntities(titleMatch[1].trim()) : null;
+    const epubTitle = titleMatch ? decodeXmlEntities(titleMatch[1].trim()).slice(0, 140) : null;
 
     // Parse manifest items
     const manifest = new Map();
@@ -426,10 +1321,11 @@ function parseEpubData(epubFilePath, bookId) {
       const typeM = attrs.match(/\bmedia-type\s*=\s*["']([^"']+)["']/i);
       const propM = attrs.match(/\bproperties\s*=\s*["']([^"']+)["']/i);
       if (idM && hrefM) {
+        const decodedHref = safeDecodeURIComponent(hrefM[1]) || hrefM[1];
         manifest.set(idM[1], {
           id: idM[1],
-          href: decodeURIComponent(hrefM[1]),
-          fullPath: resolveRel(decodeURIComponent(hrefM[1])),
+          href: decodedHref,
+          fullPath: resolveRel(decodedHref),
           mediaType: typeM ? typeM[1].toLowerCase() : '',
           properties: propM ? propM[1].toLowerCase() : ''
         });
@@ -475,7 +1371,7 @@ function parseEpubData(epubFilePath, bookId) {
     const coverCacheFile = safeCoverCachePath(bookId);
     if (coverItem && !fs.existsSync(coverCacheFile)) {
       const imgBuf = zip.extractEntry(coverItem.fullPath);
-      if (imgBuf && imgBuf.length > 0) {
+      if (imgBuf && imgBuf.length > 0 && imgBuf.length <= MAX_COVER_BYTES && isValidImageBuffer(imgBuf)) {
         try {
           fs.writeFileSync(coverCacheFile, imgBuf);
         } catch {
@@ -494,7 +1390,6 @@ function parseEpubData(epubFilePath, bookId) {
       }
     }
 
-    // Extract HTML sections from spine and paginate longer chapters into readable chunks
     const pages = [];
     const hrefToPageIndex = new Map();
     const encodedBookId = encodeURIComponent(bookId);
@@ -509,28 +1404,28 @@ function parseEpubData(epubFilePath, bookId) {
       let bodyHtml = bodyMatch ? bodyMatch[1] : htmlStr;
 
       const sectionDir = path.posix.dirname(item.fullPath);
-      // Rewrite relative src and href attributes inside EPUB HTML to /epub-resource/:bookId/...
       bodyHtml = bodyHtml.replace(
         /\b(src|href|xlink:href)\s*=\s*["']([^"']+)["']/gi,
         (full, attr, val) => {
-          if (/^(https?:|data:|mailto:|#)/i.test(val)) return full;
+          if (/^(https?:|mailto:|#)/i.test(val)) return full;
+          if (/^(javascript:|vbscript:|data:)/i.test(val.trim())) return `${attr}="#"`;
           const cleanVal = val.split('#')[0];
           const resolved =
             sectionDir === '.'
               ? cleanVal
               : path.posix.normalize(path.posix.join(sectionDir, cleanVal));
           if (attr.toLowerCase() === 'href' && /\.(xhtml|html|htm)$/i.test(cleanVal)) {
-            return `data-epub-href="${resolved}"`;
+            return `data-epub-href="${escapeHtmlAttr(resolved)}"`;
+          }
+          const ext = path.posix.extname(resolved).toLowerCase();
+          if (!EPUB_SAFE_ASSET_EXTS.has(ext)) {
+            return '';
           }
           return `${attr}="/epub-resource/${encodedBookId}/${encodeURIComponent(resolved)}"`;
         }
       );
 
-      // Remove <script> and <style> tags that might break dark mode
-      bodyHtml = bodyHtml
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '');
-
+      bodyHtml = sanitizeEpubHtml(bodyHtml);
       if (!bodyHtml.trim()) return;
 
       hrefToPageIndex.set(item.fullPath, pages.length);
@@ -546,7 +1441,7 @@ function parseEpubData(epubFilePath, bookId) {
       });
     });
 
-    // Parse Table of Contents (NCX or EPUB3 nav)
+    // Parse Table of Contents (NCX) without catastrophic backtracking regex
     const autoChapters = [];
     let ncxItem = null;
     for (const item of manifest.values()) {
@@ -560,22 +1455,40 @@ function parseEpubData(epubFilePath, bookId) {
       if (ncxBuf) {
         const ncxXml = ncxBuf.toString('utf8');
         const ncxDir = path.posix.dirname(ncxItem.fullPath);
-        const navPointRegex =
-          /<navPoint\b[^>]*>[\s\S]*?<navLabel>\s*<text>([\s\S]*?)<\/text>\s*<\/navLabel>\s*<content\s+src\s*=\s*["']([^"']+)["']/gi;
-        while ((match = navPointRegex.exec(ncxXml)) !== null) {
-          const chTitle = decodeXmlEntities(match[1].trim());
-          const rawSrc = decodeURIComponent(match[2].split('#')[0]);
-          const fullTarget =
-            ncxDir === '.' ? rawSrc : path.posix.normalize(path.posix.join(ncxDir, rawSrc));
-          const pIdx =
-            hrefToPageIndex.get(fullTarget) ?? hrefToPageIndex.get(rawSrc) ?? 0;
-          if (chTitle) {
-            autoChapters.push({
-              id: `epub-ch-${autoChapters.length}`,
-              title: chTitle,
-              pageIndex: pIdx,
-              pageLabel: `Side ${pIdx + 1}`
-            });
+        let searchPos = 0;
+        while (autoChapters.length < 500) {
+          const startIdx = ncxXml.indexOf('<navPoint', searchPos);
+          if (startIdx === -1) break;
+          const tagEnd = ncxXml.indexOf('>', startIdx);
+          if (tagEnd === -1) break;
+          const nextStart = ncxXml.indexOf('<navPoint', tagEnd + 1);
+          const closeIdx = ncxXml.indexOf('</navPoint>', tagEnd + 1);
+          let sliceEnd = ncxXml.length;
+          if (closeIdx !== -1 && (nextStart === -1 || closeIdx < nextStart)) {
+            sliceEnd = closeIdx;
+          } else if (nextStart !== -1) {
+            sliceEnd = nextStart;
+          }
+          const chunk = ncxXml.slice(tagEnd + 1, Math.min(sliceEnd, tagEnd + 4096));
+          searchPos = tagEnd + 1;
+
+          const textM = chunk.match(/<text\b[^>]*>([^<]{0,300})<\/text>/i);
+          const contentM = chunk.match(/<content\b[^>]*\bsrc\s*=\s*["']([^"']{1,500})["']/i);
+          if (textM && contentM) {
+            const chTitle = decodeXmlEntities(textM[1].trim()).slice(0, 140);
+            const rawSrcPart = contentM[1].split('#')[0];
+            const decodedSrc = safeDecodeURIComponent(rawSrcPart) || rawSrcPart;
+            if (chTitle && decodedSrc) {
+              const fullTarget =
+                ncxDir === '.' ? decodedSrc : path.posix.normalize(path.posix.join(ncxDir, decodedSrc));
+              const pIdx = hrefToPageIndex.get(fullTarget) ?? hrefToPageIndex.get(decodedSrc) ?? 0;
+              autoChapters.push({
+                id: `epub-ch-${autoChapters.length}`,
+                title: chTitle,
+                pageIndex: pIdx,
+                pageLabel: `Side ${pIdx + 1}`
+              });
+            }
           }
         }
       }
@@ -589,7 +1502,7 @@ function parseEpubData(epubFilePath, bookId) {
       autoChapters
     };
 
-    epubCache.set(epubFilePath, { mtimeMs: stat.mtimeMs, data: result });
+    setBoundedCache(epubCache, epubFilePath, { mtimeMs: stat.mtimeMs, data: result });
     return result;
   } catch (err) {
     console.error('EPUB parse feil:', err.message);
@@ -606,7 +1519,6 @@ function inspectPdfFile(pdfFilePath) {
       return cached.data;
     }
 
-    // Read up to 4MB to count /Type /Page or /Count
     const readSize = Math.min(stat.size, 4 * 1024 * 1024);
     const fd = fs.openSync(pdfFilePath, 'r');
     const buf = Buffer.alloc(readSize);
@@ -626,7 +1538,7 @@ function inspectPdfFile(pdfFilePath) {
     }
     if (pageCount <= 0) pageCount = 1;
 
-    let ratio = 0.707; // A4 default
+    let ratio = 0.707;
     const mediaBoxM = str.match(/\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]/);
     if (mediaBoxM) {
       const w = parseFloat(mediaBoxM[3]) - parseFloat(mediaBoxM[1]);
@@ -637,7 +1549,7 @@ function inspectPdfFile(pdfFilePath) {
     }
 
     const data = { pageCount, ratio };
-    pdfInfoCache.set(pdfFilePath, { mtimeMs: stat.mtimeMs, data });
+    setBoundedCache(pdfInfoCache, pdfFilePath, { mtimeMs: stat.mtimeMs, data });
     return data;
   } catch {
     return { pageCount: 1, ratio: 0.707 };
@@ -645,7 +1557,9 @@ function inspectPdfFile(pdfFilePath) {
 }
 
 function parseBookFolder(booksDir, folderName) {
+  if (!isValidBookId(folderName)) return null;
   const folderPath = path.join(booksDir, folderName);
+  if (!isPathInsideDir(booksDir, folderPath)) return null;
   if (!fs.existsSync(folderPath)) return null;
   const stat = fs.statSync(folderPath);
   const encodedBookId = encodeURIComponent(folderName);
@@ -671,10 +1585,14 @@ function parseBookFolder(booksDir, folderName) {
 
       const totalPages = Math.max(1, epubInfo.pages.length);
       const chapters = meta.chapters.length > 0 ? meta.chapters : epubInfo.autoChapters;
+      const originalTitle = epubInfo.epubTitle || baseTitle;
 
       return {
         id: folderName,
-        title: epubInfo.epubTitle || baseTitle,
+        title: meta.title || originalTitle,
+        originalTitle,
+        customTitle: meta.title || '',
+        adminOnly: Boolean(meta.adminOnly),
         format: 'epub',
         ebookUrl: `/book-media/${encodedBookId}/__ebook`,
         sizeScale: meta.sizeScale || 1.0,
@@ -708,7 +1626,7 @@ function parseBookFolder(booksDir, folderName) {
     const pages = Array.from({ length: totalPages }, (_, idx) => ({
       index: idx,
       filename: `page-${idx + 1}.pdf`,
-      label: idx === 0 ? `Forsats / Side 1` : `Side ${idx + 1}`,
+      label: idx === 0 ? 'Forsats / Side 1' : `Side ${idx + 1}`,
       shortLabel: `Side ${idx + 1}`,
       type: idx === 0 ? 'c1' : 'page',
       pageNumber: idx + 1,
@@ -717,7 +1635,10 @@ function parseBookFolder(booksDir, folderName) {
 
     return {
       id: folderName,
-      title: baseTitle,
+      title: meta.title || baseTitle,
+      originalTitle: baseTitle,
+      customTitle: meta.title || '',
+      adminOnly: Boolean(meta.adminOnly),
       format: 'pdf',
       ebookUrl: `/book-media/${encodedBookId}/__ebook`,
       sizeScale: meta.sizeScale || 1.0,
@@ -739,6 +1660,7 @@ function parseBookFolder(booksDir, folderName) {
   }
 
   // Case 2: Subfolder inside booksDir
+  if (!stat.isDirectory()) return null;
   let entries;
   try {
     entries = fs.readdirSync(folderPath, { withFileTypes: true });
@@ -777,11 +1699,11 @@ function parseBookFolder(booksDir, folderName) {
   const mediaUrl = (filename) =>
     filename ? `/book-media/${encodedBookId}/${encodeURIComponent(filename)}` : null;
 
-  // If the folder contains a .pdf or .epub and no numbered image pages, treat it as a PDF/EPUB folder book (which can still use c1/c2/c3 covers!)
   if (contentPages.length === 0 && ebookFiles.length > 0) {
     const ebookFile = ebookFiles[0];
     const ext = path.extname(ebookFile).toLowerCase();
     const ebookFullPath = path.join(folderPath, ebookFile);
+    if (!isPathInsideDir(folderPath, ebookFullPath)) return null;
     const coverCacheFile = safeCoverCachePath(folderName);
 
     if (ext === '.epub') {
@@ -807,7 +1729,10 @@ function parseBookFolder(booksDir, folderName) {
 
       return {
         id: folderName,
-        title: folderName,
+        title: meta.title || folderName,
+        originalTitle: folderName,
+        customTitle: meta.title || '',
+        adminOnly: Boolean(meta.adminOnly),
         format: 'epub',
         ebookFile,
         ebookUrl: mediaUrl(ebookFile),
@@ -854,7 +1779,7 @@ function parseBookFolder(booksDir, folderName) {
     const pages = Array.from({ length: totalPages }, (_, idx) => ({
       index: idx,
       filename: `page-${idx + 1}.pdf`,
-      label: idx === 0 ? `Forsats / Side 1` : `Side ${idx + 1}`,
+      label: idx === 0 ? 'Forsats / Side 1' : `Side ${idx + 1}`,
       shortLabel: `Side ${idx + 1}`,
       type: idx === 0 ? 'c1' : 'page',
       pageNumber: idx + 1,
@@ -863,7 +1788,10 @@ function parseBookFolder(booksDir, folderName) {
 
     return {
       id: folderName,
-      title: folderName,
+      title: meta.title || folderName,
+      originalTitle: folderName,
+      customTitle: meta.title || '',
+      adminOnly: Boolean(meta.adminOnly),
       format: 'pdf',
       ebookFile,
       ebookUrl: mediaUrl(ebookFile),
@@ -939,7 +1867,7 @@ function parseBookFolder(booksDir, folderName) {
     const pageObj = readingPages[pageIdx];
     return {
       id: ch.id || `ch-${pageIdx}`,
-      title: ch.title || `Kapittel`,
+      title: ch.title || 'Kapittel',
       pageIndex: pageIdx,
       pageFile: pageObj ? pageObj.filename : ch.pageFile,
       pageLabel: pageObj ? pageObj.shortLabel : `Side ${pageIdx + 1}`
@@ -958,7 +1886,10 @@ function parseBookFolder(booksDir, folderName) {
 
   return {
     id: folderName,
-    title: folderName,
+    title: meta.title || folderName,
+    originalTitle: folderName,
+    customTitle: meta.title || '',
+    adminOnly: Boolean(meta.adminOnly),
     format: 'images',
     sizeScale: meta.sizeScale || 1.0,
     covers: {
@@ -987,7 +1918,7 @@ function parseBookFolder(booksDir, folderName) {
 }
 
 function scanAllBooks() {
-  const config = getConfig();
+  const config = getRuntimeConfig();
   const booksDir = config.booksDir;
   if (!fs.existsSync(booksDir)) {
     return [];
@@ -1003,13 +1934,12 @@ function scanAllBooks() {
 
   const candidateNames = dirEntries
     .filter((e) => {
-      if (e.name.startsWith('.')) return false;
+      if (!isValidBookId(e.name)) return false;
       if (e.isDirectory()) return true;
       if (e.isFile() && EBOOK_EXTENSIONS.has(path.extname(e.name).toLowerCase())) return true;
       return false;
     })
-    .map((e) => e.name)
-    .sort(naturalCollator.compare);
+    .map((e) => e.name);
 
   const books = [];
   for (const name of candidateNames) {
@@ -1018,6 +1948,7 @@ function scanAllBooks() {
       books.push(parsed);
     }
   }
+  books.sort((a, b) => naturalCollator.compare(a.title, b.title));
   return books;
 }
 
@@ -1042,7 +1973,7 @@ function getJpegInfo(buf) {
       continue;
     }
     const len = buf.readUInt16BE(offset + 2);
-    // SOF0, SOF1, SOF2 markers
+    if (len < 2) break;
     if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
       const height = buf.readUInt16BE(offset + 5);
       const width = buf.readUInt16BE(offset + 7);
@@ -1058,9 +1989,6 @@ function getJpegInfo(buf) {
   return { width: 800, height: 1200, components: 3 };
 }
 
-/**
- * Builds a multi-page PDF buffer directly from JPEG files without re-compressing.
- */
 function buildPdfFromJpegs(filePaths) {
   const chunks = [];
   let byteOffset = 0;
@@ -1080,13 +2008,6 @@ function buildPdfFromJpegs(filePaths) {
   pushStr('%PDF-1.4\n%\xFF\xFF\xFF\xFF\n');
 
   const pageCount = filePaths.length;
-  // Object IDs:
-  // 1: Catalog
-  // 2: Pages
-  // For each page i (0..pageCount-1):
-  //   pageObjId = 3 + i * 3
-  //   contentObjId = 4 + i * 3
-  //   imageObjId = 5 + i * 3
   const totalObjects = 2 + pageCount * 3;
   const pageObjIds = [];
 
@@ -1100,11 +2021,9 @@ function buildPdfFromJpegs(filePaths) {
     const info = getJpegInfo(imgBuf);
     const colorSpace = info.components === 1 ? '/DeviceGray' : '/DeviceRGB';
 
-    // Scale to standard 595pt width (A4 width), preserving aspect ratio
     const pdfW = 595.28;
     const pdfH = Math.round(((pdfW * info.height) / info.width) * 100) / 100;
 
-    // Image XObject
     offsets[imageObjId] = byteOffset;
     pushStr(
       `${imageObjId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${info.width} /Height ${info.height} /ColorSpace ${colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBuf.length} >>\nstream\n`
@@ -1112,30 +2031,25 @@ function buildPdfFromJpegs(filePaths) {
     pushBuf(imgBuf);
     pushStr('\nendstream\nendobj\n');
 
-    // Content stream drawing the image across the full page
     const contentStr = `q\n${pdfW} 0 0 ${pdfH} 0 0 cm\n/Im0 Do\nQ\n`;
     offsets[contentObjId] = byteOffset;
     pushStr(
       `${contentObjId} 0 obj\n<< /Length ${contentStr.length} >>\nstream\n${contentStr}endstream\nendobj\n`
     );
 
-    // Page object
     offsets[pageObjId] = byteOffset;
     pushStr(
       `${pageObjId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pdfW} ${pdfH}] /Resources << /XObject << /Im0 ${imageObjId} 0 R >> >> /Contents ${contentObjId} 0 R >>\nendobj\n`
     );
   }
 
-  // Pages tree (Obj 2)
   offsets[2] = byteOffset;
   const kidsRef = pageObjIds.map((id) => `${id} 0 R`).join(' ');
   pushStr(`2 0 obj\n<< /Type /Pages /Kids [${kidsRef}] /Count ${pageCount} >>\nendobj\n`);
 
-  // Catalog (Obj 1)
   offsets[1] = byteOffset;
-  pushStr(`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`);
+  pushStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
 
-  // Cross-reference table
   const xrefOffset = byteOffset;
   pushStr(`xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`);
   for (let objId = 1; objId <= totalObjects; objId++) {
@@ -1150,9 +2064,6 @@ function buildPdfFromJpegs(filePaths) {
   return Buffer.concat(chunks);
 }
 
-/**
- * Builds an uncompressed (STORE) ZIP buffer from an array of { name, filePath }.
- */
 function buildZipFromFiles(items) {
   const localParts = [];
   const centralParts = [];
@@ -1164,14 +2075,13 @@ function buildZipFromFiles(items) {
     const crc = zlib.crc32(fileBuf) >>> 0;
     const size = fileBuf.length;
 
-    // Local file header (30 bytes + name)
     const localHeader = Buffer.alloc(30);
-    localHeader.writeUInt32LE(0x04034b50, 0); // signature
-    localHeader.writeUInt16LE(20, 4);         // version needed
-    localHeader.writeUInt16LE(0x0800, 6);     // UTF-8 flag
-    localHeader.writeUInt16LE(0, 8);          // method 0 (STORE)
-    localHeader.writeUInt16LE(0, 10);         // time
-    localHeader.writeUInt16LE(0x21, 12);      // date
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0x21, 12);
     localHeader.writeUInt32LE(crc, 14);
     localHeader.writeUInt32LE(size, 18);
     localHeader.writeUInt32LE(size, 22);
@@ -1180,7 +2090,6 @@ function buildZipFromFiles(items) {
 
     localParts.push(localHeader, nameBuf, fileBuf);
 
-    // Central directory header (46 bytes + name)
     const centralHeader = Buffer.alloc(46);
     centralHeader.writeUInt32LE(0x02014b50, 0);
     centralHeader.writeUInt16LE(20, 4);
@@ -1218,6 +2127,7 @@ function buildZipFromFiles(items) {
   return Buffer.concat([...localParts, centralBuf, eocd]);
 }
 
+// ==================== HTTP HELPERS ====================
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
@@ -1228,25 +2138,120 @@ function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.end(body);
 }
 
-function readRequestBody(req, maxBytes = 6 * 1024 * 1024) {
+function readRequestBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    let data = '';
+    const chunks = [];
+    let totalBytes = 0;
+    let rejected = false;
+
     req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > maxBytes) {
-        req.destroy();
-        reject(new Error('Payload for stor'));
+      if (rejected) return;
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        rejected = true;
+        req.pause();
+        reject(new HttpError(413, 'Forespørselen er for stor'));
+        return;
       }
+      chunks.push(chunk);
     });
+
     req.on('end', () => {
-      if (!data) return resolve({});
+      if (rejected) return;
+      if (chunks.length === 0) return resolve({});
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (!raw) return resolve({});
       try {
-        resolve(JSON.parse(data));
-      } catch (err) {
-        reject(err);
+        const parsed = JSON.parse(raw);
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(new HttpError(400, 'Forventet JSON-objekt'));
+          return;
+        }
+        resolve(parsed);
+      } catch {
+        reject(new HttpError(400, 'Ugyldig JSON'));
       }
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => {
+      if (!rejected) reject(err);
+    });
+  });
+}
+
+function streamBinaryUploadToFile(req, tmpPath, ext, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let totalBytes = 0;
+    let settled = false;
+    let headerBuf = Buffer.alloc(0);
+    let headerChecked = false;
+    const outStream = fs.createWriteStream(tmpPath, { flags: 'wx', mode: 0o600 });
+
+    const fail = (statusCode, message) => {
+      if (settled) return;
+      settled = true;
+      req.pause();
+      outStream.destroy();
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {
+        // ignore
+      }
+      reject(new HttpError(statusCode, message));
+    };
+
+    const verifyMagic = (buf) => {
+      if (ext === '.pdf') {
+        return buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-';
+      }
+      if (ext === '.epub') {
+        return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+      }
+      return false;
+    };
+
+    outStream.on('error', () => fail(500, 'Kunne ikke lagre opplastet fil'));
+
+    req.on('data', (chunk) => {
+      if (settled) return;
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        fail(413, 'Filen er for stor (maks 100 MB)');
+        return;
+      }
+      if (!headerChecked) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        if (headerBuf.length >= 5) {
+          headerChecked = true;
+          if (!verifyMagic(headerBuf)) {
+            fail(400, `Ugyldig ${ext.toUpperCase()}-fil (signatur stemmer ikke)`);
+            return;
+          }
+        }
+      }
+      if (!outStream.write(chunk)) {
+        req.pause();
+        outStream.once('drain', () => {
+          if (!settled) req.resume();
+        });
+      }
+    });
+
+    req.on('end', () => {
+      if (settled) return;
+      if (totalBytes === 0 || (!headerChecked && !verifyMagic(headerBuf))) {
+        fail(400, `Ugyldig eller tom ${ext.toUpperCase()}-fil`);
+        return;
+      }
+      outStream.end(() => {
+        if (!settled) {
+          settled = true;
+          resolve(totalBytes);
+        }
+      });
+    });
+
+    req.on('error', () => fail(400, 'Avbrutt opplasting'));
   });
 }
 
@@ -1256,6 +2261,7 @@ const MIME_TYPES = {
   '.htm': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
@@ -1289,7 +2295,7 @@ function serveFile(req, res, filePath, cacheControl = 'public, max-age=3600') {
       const parts = rangeHeader.replace(/bytes=/, '').split('-');
       const start = parts[0] ? parseInt(parts[0], 10) : 0;
       const end = parts[1] ? Math.min(stats.size - 1, parseInt(parts[1], 10)) : stats.size - 1;
-      if (start >= stats.size || start > end) {
+      if (Number.isNaN(start) || Number.isNaN(end) || start < 0 || start >= stats.size || start > end) {
         res.writeHead(416, { 'Content-Range': `bytes */${stats.size}` });
         res.end();
         return;
@@ -1333,19 +2339,34 @@ function serveFile(req, res, filePath, cacheControl = 'public, max-age=3600') {
   });
 }
 
-function getRequestProfileId(req, parsedUrl) {
-  return (
-    parsedUrl.searchParams.get('profileId') ||
-    req.headers['x-profile-id'] ||
-    'main'
-  );
-}
-
+// ==================== HTTP SERVER ====================
 const server = http.createServer(async (req, res) => {
   try {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    applySecurityHeaders(req, res);
+
+    const rawUrlPath = String(req.url || '/').split('?')[0].split('#')[0];
+    if (
+      rawUrlPath
+        .split('/')
+        .some((seg) => /^(?:\.|%2e){1,2}$/i.test(seg))
+    ) {
+      return sendJson(res, 400, { error: 'Ugyldig sti' });
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(req.url || '/', 'http://localhost');
+    } catch {
+      return sendJson(res, 400, { error: 'Ugyldig URL' });
+    }
+    if (parsedUrl.origin !== 'http://localhost') {
+      return sendJson(res, 400, { error: 'Ugyldig URL' });
+    }
+
     const pathname = parsedUrl.pathname;
-    const profileId = getRequestProfileId(req, parsedUrl);
+    if (pathname.includes('\0') || pathname.toLowerCase().includes('%00')) {
+      return sendJson(res, 400, { error: 'Ugyldig sti' });
+    }
 
     // ==================== HEALTHCHECK ====================
     if (pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -1356,127 +2377,532 @@ const server = http.createServer(async (req, res) => {
       return res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok' }));
     }
 
+    // ==================== FETCH METADATA & CSRF CHECKS ====================
+    if (!checkFetchMetadata(req, pathname)) {
+      return sendJson(res, 403, { error: 'Blokkert av sikkerhetspolicy' });
+    }
+
+    const isMutation =
+      req.method === 'POST' ||
+      req.method === 'PUT' ||
+      req.method === 'DELETE' ||
+      req.method === 'PATCH';
+
+    if (isMutation) {
+      if (!checkOriginForMutation(req)) {
+        return sendJson(res, 403, { error: 'Ugyldig opprinnelse' });
+      }
+      if (pathname.startsWith('/api/')) {
+        const contentType = String(req.headers['content-type'] || '').toLowerCase();
+        if (pathname === '/api/upload-ebook' && req.method === 'POST') {
+          if (!contentType.startsWith('application/octet-stream') || req.headers['x-requested-with'] !== 'fetch') {
+            return sendJson(res, 415, { error: 'Forventet application/octet-stream' });
+          }
+        } else if (!contentType.startsWith('application/json')) {
+          return sendJson(res, 415, { error: 'Forventet application/json' });
+        }
+      }
+    }
+
     // ==================== AUTHENTICATION API ====================
+    const session = getSessionFromRequest(req);
+
     if (pathname === '/api/auth/check' && req.method === 'GET') {
-      const authenticated = isRequestAuthenticated(req, parsedUrl);
-      return sendJson(res, 200, { authenticated });
+      const cfg = getRuntimeConfig();
+      return sendJson(res, 200, {
+        authenticated: Boolean(session),
+        isAdmin: Boolean(session && session.role === 'admin'),
+        activeProfileId: session ? session.activeProfileId : null,
+        passwordLockedByEnv: cfg.passwordLockedByEnv,
+        adminPasswordLockedByEnv: cfg.adminPasswordLockedByEnv
+      });
     }
 
     if (pathname === '/api/auth/login' && req.method === 'POST') {
-      const body = await readRequestBody(req);
-      const config = getConfig();
-      const inputPwd = String(body.password || '');
-      if (inputPwd === config.password) {
-        const token = makeAuthToken(config.password);
+      const ip = getClientIp(req);
+      const rl = checkRateLimit(ip);
+      if (!rl.allowed) {
         return sendJson(
           res,
-          200,
-          { ok: true, token },
-          {
-            'Set-Cookie': `bokami_token=${token}; Path=/; Max-Age=31536000; SameSite=Lax`
-          }
+          429,
+          { error: 'For mange innloggingsforsøk. Prøv igjen senere.' },
+          { 'Retry-After': String(rl.retryAfterSec) }
         );
       }
-      return sendJson(res, 401, { error: 'Feil passord' });
+
+      const body = await readRequestBody(req, 32 * 1024);
+      const inputPwd = typeof body.password === 'string' ? body.password : '';
+      if (!inputPwd || inputPwd.length > 256) {
+        recordFailedAttempt(ip);
+        return sendJson(res, 401, { error: 'Feil passord' });
+      }
+
+      let matchedRole = null;
+      let matchedProfileId = null;
+
+      if (verifyGlobalAdminPassword(inputPwd)) {
+        matchedRole = 'admin';
+      } else {
+        const profilesData = getProfilesData();
+        const matchedAdminProfile = profilesData.profiles.find(
+          (p) => p.isAdmin && p.adminPasswordHash && verifyPassword(inputPwd, p.adminPasswordHash)
+        );
+        if (matchedAdminProfile) {
+          matchedRole = 'admin';
+          matchedProfileId = matchedAdminProfile.id;
+        } else if (verifyReaderPassword(inputPwd)) {
+          matchedRole = 'user';
+        }
+      }
+
+      if (!matchedRole) {
+        recordFailedAttempt(ip);
+        return sendJson(res, 401, { error: 'Feil passord' });
+      }
+
+      clearFailedAttempts(ip);
+      const newSession = rotateSession(session ? session.id : null, matchedRole, matchedProfileId);
+      return sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          isAdmin: newSession.role === 'admin',
+          matchedProfileId
+        },
+        { 'Set-Cookie': buildSessionSetCookie(req, newSession.id) }
+      );
     }
 
-    // Protect API and book-media routes with password
+    if (pathname === '/api/auth/logout' && req.method === 'POST') {
+      if (session) deleteSession(session.id);
+      return sendJson(
+        res,
+        200,
+        { ok: true },
+        {
+          'Set-Cookie': buildClearSessionCookie(req),
+          'Clear-Site-Data': '"cookies", "storage", "cache"'
+        }
+      );
+    }
+
+    // All API, book-media, and epub-resource routes below require an active session
     if (
       (pathname.startsWith('/api/') ||
         pathname.startsWith('/book-media/') ||
         pathname.startsWith('/epub-resource/')) &&
-      !isRequestAuthenticated(req, parsedUrl)
+      !session
     ) {
-      return sendJson(res, 401, { error: 'Krever passord' });
+      return sendJson(res, 401, { error: 'Krever innlogging' });
+    }
+
+    if (pathname === '/api/auth/admin-unlock' && req.method === 'POST') {
+      const ip = getClientIp(req);
+      const rl = checkRateLimit(ip);
+      if (!rl.allowed) {
+        return sendJson(
+          res,
+          429,
+          { error: 'For mange forsøk. Prøv igjen senere.' },
+          { 'Retry-After': String(rl.retryAfterSec) }
+        );
+      }
+
+      const body = await readRequestBody(req, 32 * 1024);
+      const inputPwd = typeof body.password === 'string' ? body.password : '';
+      const targetProfileId = typeof body.profileId === 'string' && body.profileId ? body.profileId : null;
+      const profilesData = getProfilesData();
+
+      let targetProfile = null;
+      if (targetProfileId) {
+        targetProfile = profilesData.profiles.find((p) => p.id === targetProfileId);
+        if (!targetProfile) {
+          return sendJson(res, 404, { error: 'Profil ikke funnet' });
+        }
+      }
+
+      let authorized = false;
+      if (inputPwd && inputPwd.length <= 256) {
+        if (verifyGlobalAdminPassword(inputPwd)) {
+          authorized = true;
+        } else if (targetProfile) {
+          if (targetProfile.isAdmin && targetProfile.adminPasswordHash) {
+            authorized = verifyPassword(inputPwd, targetProfile.adminPasswordHash);
+          }
+        } else {
+          authorized = profilesData.profiles.some(
+            (p) => p.isAdmin && p.adminPasswordHash && verifyPassword(inputPwd, p.adminPasswordHash)
+          );
+        }
+      }
+
+      if (!authorized) {
+        recordFailedAttempt(ip);
+        return sendJson(res, 401, { error: 'Feil admin-passord' });
+      }
+
+      clearFailedAttempts(ip);
+      const nextActiveProfileId = targetProfile ? targetProfile.id : session.activeProfileId;
+      const upgraded = rotateSession(session.id, 'admin', nextActiveProfileId);
+      return sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          isAdmin: true,
+          activeProfileId: upgraded.activeProfileId
+        },
+        { 'Set-Cookie': buildSessionSetCookie(req, upgraded.id) }
+      );
+    }
+
+    if (pathname === '/api/auth/admin-lock' && req.method === 'POST') {
+      const profilesData = getProfilesData();
+      let nextProfileId = session.activeProfileId;
+      if (nextProfileId) {
+        const activeProf = profilesData.profiles.find((p) => p.id === nextProfileId);
+        if (!activeProf || activeProf.isAdmin) {
+          nextProfileId = null;
+        }
+      }
+      const downgraded = rotateSession(session.id, 'user', nextProfileId);
+      return sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          isAdmin: false,
+          activeProfileId: downgraded.activeProfileId
+        },
+        { 'Set-Cookie': buildSessionSetCookie(req, downgraded.id) }
+      );
+    }
+
+    if (pathname === '/api/session/profile' && req.method === 'POST') {
+      const body = await readRequestBody(req, 16 * 1024);
+      const profileId = typeof body.profileId === 'string' ? body.profileId.trim() : '';
+      if (!profileId) {
+        return sendJson(res, 400, { error: 'Mangler profileId' });
+      }
+      const profilesData = getProfilesData();
+      const target = profilesData.profiles.find((p) => p.id === profileId);
+      if (!target) {
+        return sendJson(res, 404, { error: 'Profil ikke funnet' });
+      }
+      if (target.isAdmin && session.role !== 'admin') {
+        return sendJson(res, 403, {
+          error: 'Admin-tilgang kreves for denne profilen',
+          requireAdmin: true
+        });
+      }
+      session.activeProfileId = target.id;
+      persistSessions();
+      return sendJson(res, 200, {
+        ok: true,
+        activeProfileId: target.id,
+        isAdmin: session.role === 'admin'
+      });
+    }
+
+    // ==================== ADMIN API ====================
+    if (pathname.startsWith('/api/admin/')) {
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+
+      if (pathname === '/api/admin/overview' && req.method === 'GET') {
+        const cfg = getRuntimeConfig();
+        const allBooks = scanAllBooks();
+        const profilesData = getProfilesData();
+        return sendJson(res, 200, {
+          books: allBooks.map((b) => ({
+            id: b.id,
+            title: b.title,
+            originalTitle: b.originalTitle || b.id,
+            customTitle: b.customTitle || '',
+            format: b.format || 'images',
+            adminOnly: Boolean(b.adminOnly),
+            totalPages: b.totalPages
+          })),
+          profiles: profilesData.profiles.map((p) => sanitizeProfileSummary(p, true)),
+          passwordLockedByEnv: cfg.passwordLockedByEnv,
+          adminPasswordLockedByEnv: cfg.adminPasswordLockedByEnv,
+          serverInfo: {
+            port: PORT,
+            lanIps: getLanAddresses()
+          }
+        });
+      }
+
+      if (
+        pathname.startsWith('/api/admin/profiles/') &&
+        pathname.endsWith('/access') &&
+        req.method === 'PUT'
+      ) {
+        const rawId = pathname.slice(
+          '/api/admin/profiles/'.length,
+          pathname.length - '/access'.length
+        );
+        const targetId = safeDecodeURIComponent(rawId);
+        if (!targetId) {
+          return sendJson(res, 400, { error: 'Ugyldig profil-ID' });
+        }
+
+        const body = await readRequestBody(req, 128 * 1024);
+        const data = getProfilesData();
+        const target = data.profiles.find((p) => p.id === targetId);
+        if (!target) {
+          return sendJson(res, 404, { error: 'Profil ikke funnet' });
+        }
+
+        if (typeof body.isAdmin === 'boolean') {
+          if (!body.isAdmin && target.isAdmin) {
+            const adminCount = data.profiles.filter((p) => p.isAdmin).length;
+            if (adminCount <= 1) {
+              return sendJson(res, 400, { error: 'Minst én profil må være administrator' });
+            }
+          }
+          target.isAdmin = body.isAdmin;
+          if (!target.isAdmin) {
+            target.adminPasswordHash = null;
+          }
+        }
+
+        if (Array.isArray(body.hiddenBooks)) {
+          if (body.hiddenBooks.length > 1000) {
+            return sendJson(res, 400, { error: 'For mange skjulte bøker' });
+          }
+          const cleaned = [];
+          for (const item of body.hiddenBooks) {
+            if (typeof item !== 'string' || !isValidBookId(item)) {
+              return sendJson(res, 400, { error: 'Ugyldig bok-ID i skjulte bøker' });
+            }
+            if (!cleaned.includes(item)) cleaned.push(item);
+          }
+          target.hiddenBooks = cleaned;
+        }
+
+        if (body.clearAdminPassword === true) {
+          target.adminPasswordHash = null;
+        } else if (typeof body.adminPassword === 'string' && body.adminPassword.length > 0) {
+          if (!target.isAdmin) {
+            return sendJson(res, 400, { error: 'Profilen må være admin for å ha personlig admin-passord' });
+          }
+          if (body.adminPassword.length < 4 || body.adminPassword.length > 128) {
+            return sendJson(res, 400, { error: 'Admin-passordet må være mellom 4 og 128 tegn' });
+          }
+          target.adminPasswordHash = hashPassword(body.adminPassword);
+        }
+
+        saveJson(PROFILES_FILE, data);
+        return sendJson(res, 200, {
+          ok: true,
+          profile: sanitizeProfileSummary(target, true)
+        });
+      }
+
+      if (pathname === '/api/admin/passwords' && req.method === 'POST') {
+        const body = await readRequestBody(req, 32 * 1024);
+        const cfg = getRuntimeConfig();
+        const loadedRaw = loadJson(CONFIG_FILE, {});
+        const nextConfig =
+          loadedRaw && typeof loadedRaw === 'object' && !Array.isArray(loadedRaw)
+            ? { ...loadedRaw }
+            : {};
+
+        let updatedAny = false;
+        let readerUpdated = false;
+        let adminUpdated = false;
+
+        if (typeof body.readerPassword === 'string' && body.readerPassword.length > 0) {
+          if (cfg.passwordLockedByEnv) {
+            return sendJson(res, 400, {
+              error: 'Leserpassordet styres av miljøvariabelen BOKAMI_PASSWORD'
+            });
+          }
+          if (body.readerPassword.length < 4 || body.readerPassword.length > 128) {
+            return sendJson(res, 400, { error: 'Leserpassordet må være mellom 4 og 128 tegn' });
+          }
+          nextConfig.passwordHash = hashPassword(body.readerPassword);
+          delete nextConfig.password;
+          updatedAny = true;
+          readerUpdated = true;
+        }
+
+        if (typeof body.adminPassword === 'string' && body.adminPassword.length > 0) {
+          if (cfg.adminPasswordLockedByEnv) {
+            return sendJson(res, 400, {
+              error: 'Admin-passordet styres av miljøvariabelen BOKAMI_ADMIN_PASSWORD'
+            });
+          }
+          if (body.adminPassword.length < 4 || body.adminPassword.length > 128) {
+            return sendJson(res, 400, { error: 'Admin-passordet må være mellom 4 og 128 tegn' });
+          }
+          nextConfig.adminPasswordHash = hashPassword(body.adminPassword);
+          updatedAny = true;
+          adminUpdated = true;
+        }
+
+        if (!updatedAny) {
+          return sendJson(res, 400, { error: 'Ingen passord å oppdatere' });
+        }
+
+        saveJson(CONFIG_FILE, nextConfig);
+
+        let sessionsChanged = false;
+        for (const [sid, s] of sessions.entries()) {
+          if (readerUpdated && s.role === 'user') {
+            sessions.delete(sid);
+            sessionsChanged = true;
+          } else if (adminUpdated && s.role === 'admin' && sid !== session.id) {
+            sessions.delete(sid);
+            sessionsChanged = true;
+          }
+        }
+        if (sessionsChanged) {
+          persistSessions();
+        }
+
+        return sendJson(res, 200, { ok: true });
+      }
+
+      return sendJson(res, 404, { error: 'Ukjent admin-endepunkt' });
     }
 
     // ==================== EXPORT PAGES API (PDF / ZIP) ====================
     if (pathname.startsWith('/api/export/') && req.method === 'GET') {
-      const bookId = decodeURIComponent(pathname.slice('/api/export/'.length));
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const book = parseBookFolder(config.booksDir, safeFolder);
-      if (!book) {
+      const bookId = safeDecodeURIComponent(pathname.slice('/api/export/'.length));
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
+
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+
+      const config = getRuntimeConfig();
+      const book = parseBookFolder(config.booksDir, bookId);
+      if (!book || isBookHiddenForProfile(session, resolvedProfile.profile, book.id, book)) {
         return sendJson(res, 404, { error: 'Bok ikke funnet' });
       }
 
-      // 1-based page numbers from query params (e.g. ?from=1&to=10&format=pdf)
+      if (activeExports >= MAX_CONCURRENT_EXPORTS) {
+        return sendJson(res, 429, { error: 'For mange samtidige eksporter, prøv igjen straks' });
+      }
+
       const fromPage = Math.max(1, parseInt(parsedUrl.searchParams.get('from'), 10) || 1);
       const toPage = Math.min(
         book.totalPages,
         Math.max(fromPage, parseInt(parsedUrl.searchParams.get('to'), 10) || fromPage)
       );
       const format = (parsedUrl.searchParams.get('format') || 'pdf').toLowerCase();
+      if (format !== 'pdf' && format !== 'zip') {
+        return sendJson(res, 400, { error: 'Ugyldig eksportformat' });
+      }
 
+      const folderPath = path.join(config.booksDir, bookId);
       const selectedPages = book.pages.slice(fromPage - 1, toPage);
-      const fileItems = selectedPages
-        .map((p) => ({
+      const fileItems = [];
+      let totalSourceBytes = 0;
+
+      for (const p of selectedPages) {
+        if (!isValidBookId(p.filename)) continue;
+        const ext = path.extname(p.filename).toLowerCase();
+        if (!IMAGE_EXTENSIONS.has(ext)) continue;
+        const filePath = path.join(folderPath, p.filename);
+        if (!isPathInsideDir(folderPath, filePath) || !fs.existsSync(filePath)) continue;
+        const st = fs.statSync(filePath);
+        if (!st.isFile()) continue;
+        totalSourceBytes += st.size;
+        if (totalSourceBytes > MAX_EXPORT_BYTES) {
+          return sendJson(res, 413, { error: 'Valgt eksportområde er for stort (maks 150 MB)' });
+        }
+        fileItems.push({
           name: `${String(p.index + 1).padStart(4, '0')}_${p.filename}`,
-          filePath: path.join(config.booksDir, safeFolder, p.filename)
-        }))
-        .filter((item) => fs.existsSync(item.filePath));
+          filePath
+        });
+      }
 
       if (fileItems.length === 0) {
         return sendJson(res, 404, { error: 'Ingen sider funnet i valgt område' });
       }
 
-      const safeTitle = safeFolder.replace(/[^a-zA-Z0-9æøåÆØÅ _-]/g, '').trim() || 'bok';
+      const safeTitle = book.title.replace(/[^a-zA-Z0-9æøåÆØÅ _-]/g, '').trim() || 'bok';
       const rangeLabel = fromPage === toPage ? `side-${fromPage}` : `side-${fromPage}-${toPage}`;
 
-      if (format === 'zip') {
-        const zipBuf = buildZipFromFiles(fileItems);
-        const outName = encodeURIComponent(`${safeTitle}_${rangeLabel}.zip`);
-        res.writeHead(200, {
-          'Content-Type': 'application/zip',
-          'Content-Length': zipBuf.length,
-          'Content-Disposition': `attachment; filename*=UTF-8''${outName}`
-        });
-        return res.end(zipBuf);
-      } else {
-        const pdfBuf = buildPdfFromJpegs(fileItems.map((f) => f.filePath));
-        const outName = encodeURIComponent(`${safeTitle}_${rangeLabel}.pdf`);
-        res.writeHead(200, {
-          'Content-Type': 'application/pdf',
-          'Content-Length': pdfBuf.length,
-          'Content-Disposition': `attachment; filename*=UTF-8''${outName}`
-        });
-        return res.end(pdfBuf);
+      activeExports++;
+      try {
+        if (format === 'zip') {
+          const zipBuf = buildZipFromFiles(fileItems);
+          const outName = encodeURIComponent(`${safeTitle}_${rangeLabel}.zip`);
+          res.writeHead(200, {
+            'Content-Type': 'application/zip',
+            'Content-Length': zipBuf.length,
+            'Cache-Control': 'private, no-store',
+            'Content-Disposition': `attachment; filename*=UTF-8''${outName}`
+          });
+          return res.end(zipBuf);
+        } else {
+          const pdfBuf = buildPdfFromJpegs(fileItems.map((f) => f.filePath));
+          const outName = encodeURIComponent(`${safeTitle}_${rangeLabel}.pdf`);
+          res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Length': pdfBuf.length,
+            'Cache-Control': 'private, no-store',
+            'Content-Disposition': `attachment; filename*=UTF-8''${outName}`
+          });
+          return res.end(pdfBuf);
+        }
+      } finally {
+        activeExports--;
       }
     }
 
     // ==================== PROFILES API ====================
     if (pathname === '/api/profiles' && req.method === 'GET') {
       const data = getProfilesData();
-      const profilesSummary = data.profiles.map((p) => {
-        const bookmarkTotal = Object.values(p.bookmarks || {}).reduce(
-          (acc, arr) => acc + (Array.isArray(arr) ? arr.length : 0),
-          0
-        );
-        const readingCount = Object.keys(p.progress || {}).length;
-        return {
-          id: p.id,
-          name: p.name,
-          avatar: p.avatar || '',
-          color: p.color || '#00A3FF',
-          bookmarkTotal,
-          readingCount
-        };
+      const isAdmin = session.role === 'admin';
+      const profilesSummary = data.profiles.map((p) => sanitizeProfileSummary(p, isAdmin));
+      return sendJson(res, 200, {
+        profiles: profilesSummary,
+        isAdmin,
+        activeProfileId: session.activeProfileId
       });
-      return sendJson(res, 200, { profiles: profilesSummary });
     }
 
     if (pathname === '/api/profiles' && req.method === 'POST') {
-      const body = await readRequestBody(req);
-      const name = String(body.name || '').trim().slice(0, 40);
+      const body = await readRequestBody(req, 512 * 1024);
+      const name = typeof body.name === 'string' ? body.name.trim().slice(0, 40) : '';
       if (!name) {
         return sendJson(res, 400, { error: 'Navn kan ikke være tomt' });
       }
+      const avatar = body.avatar === undefined ? '' : body.avatar;
+      if (!isValidAvatar(avatar)) {
+        return sendJson(res, 400, { error: 'Ugyldig profilbilde' });
+      }
+      const color = body.color === undefined ? '#00A3FF' : body.color;
+      if (!isValidHexColor(color)) {
+        return sendJson(res, 400, { error: 'Ugyldig fargekode' });
+      }
+
       const data = getProfilesData();
+      if (data.profiles.length >= MAX_PROFILES) {
+        return sendJson(res, 400, { error: `Maksimalt antall profiler (${MAX_PROFILES}) er nådd` });
+      }
+
       const newProfile = {
         id: `prof-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name,
-        avatar: typeof body.avatar === 'string' ? body.avatar : '',
-        color: typeof body.color === 'string' ? body.color : '#00A3FF',
+        avatar,
+        color,
+        isAdmin: false,
+        adminPasswordHash: null,
+        hiddenBooks: [],
         createdAt: new Date().toISOString(),
         progress: {},
         bookmarks: {},
@@ -1484,47 +2910,118 @@ const server = http.createServer(async (req, res) => {
       };
       data.profiles.push(newProfile);
       saveJson(PROFILES_FILE, data);
-      return sendJson(res, 200, { ok: true, profile: newProfile });
+      return sendJson(res, 200, {
+        ok: true,
+        profile: sanitizeProfileSummary(newProfile, session.role === 'admin')
+      });
     }
 
     if (pathname.startsWith('/api/profiles/') && req.method === 'PUT') {
-      const targetId = decodeURIComponent(pathname.slice('/api/profiles/'.length));
-      const body = await readRequestBody(req);
+      const targetId = safeDecodeURIComponent(pathname.slice('/api/profiles/'.length));
+      if (!targetId) {
+        return sendJson(res, 400, { error: 'Ugyldig profil-ID' });
+      }
+
+      const body = await readRequestBody(req, 512 * 1024);
       const data = getProfilesData();
       const target = data.profiles.find((p) => p.id === targetId);
       if (!target) {
         return sendJson(res, 404, { error: 'Profil ikke funnet' });
       }
-      if (typeof body.name === 'string' && body.name.trim()) {
-        target.name = body.name.trim().slice(0, 40);
+      if (target.isAdmin && session.role !== 'admin') {
+        return sendJson(res, 403, {
+          error: 'Admin-tilgang kreves for å redigere denne profilen',
+          requireAdmin: true
+        });
       }
-      if (typeof body.avatar === 'string') {
+
+      if (body.name !== undefined) {
+        const cleanName = typeof body.name === 'string' ? body.name.trim().slice(0, 40) : '';
+        if (!cleanName) {
+          return sendJson(res, 400, { error: 'Navn kan ikke være tomt' });
+        }
+        target.name = cleanName;
+      }
+      if (body.avatar !== undefined) {
+        if (!isValidAvatar(body.avatar)) {
+          return sendJson(res, 400, { error: 'Ugyldig profilbilde' });
+        }
         target.avatar = body.avatar;
       }
-      if (typeof body.color === 'string') {
+      if (body.color !== undefined) {
+        if (!isValidHexColor(body.color)) {
+          return sendJson(res, 400, { error: 'Ugyldig fargekode' });
+        }
         target.color = body.color;
       }
+
       saveJson(PROFILES_FILE, data);
-      return sendJson(res, 200, { ok: true, profile: target });
+      return sendJson(res, 200, {
+        ok: true,
+        profile: sanitizeProfileSummary(target, session.role === 'admin')
+      });
     }
 
     if (pathname.startsWith('/api/profiles/') && req.method === 'DELETE') {
-      const targetId = decodeURIComponent(pathname.slice('/api/profiles/'.length));
+      const targetId = safeDecodeURIComponent(pathname.slice('/api/profiles/'.length));
+      if (!targetId) {
+        return sendJson(res, 400, { error: 'Ugyldig profil-ID' });
+      }
+
       const data = getProfilesData();
+      const target = data.profiles.find((p) => p.id === targetId);
+      if (!target) {
+        return sendJson(res, 404, { error: 'Profil ikke funnet' });
+      }
+      if (target.isAdmin && session.role !== 'admin') {
+        return sendJson(res, 403, {
+          error: 'Admin-tilgang kreves for å slette denne profilen',
+          requireAdmin: true
+        });
+      }
       if (data.profiles.length <= 1) {
         return sendJson(res, 400, { error: 'Kan ikke slette den siste profilen' });
       }
+      if (target.isAdmin && data.profiles.filter((p) => p.isAdmin).length <= 1) {
+        return sendJson(res, 400, { error: 'Kan ikke slette den siste admin-profilen' });
+      }
+
       data.profiles = data.profiles.filter((p) => p.id !== targetId);
       saveJson(PROFILES_FILE, data);
+
+      let sessionsChanged = false;
+      for (const s of sessions.values()) {
+        if (s.activeProfileId === targetId) {
+          s.activeProfileId = null;
+          sessionsChanged = true;
+        }
+      }
+      if (sessionsChanged) persistSessions();
+
       return sendJson(res, 200, { ok: true });
     }
 
     // ==================== RANDOM BACKDROP API ====================
     if (pathname === '/api/random-backdrop' && req.method === 'GET') {
+      const profilesData = getProfilesData();
+      let activeProfile = null;
+      if (session.activeProfileId) {
+        activeProfile = profilesData.profiles.find((p) => p.id === session.activeProfileId) || null;
+      } else {
+        const reqProfId = req.headers['x-profile-id'] || parsedUrl.searchParams.get('profileId');
+        if (reqProfId) {
+          const candidate = profilesData.profiles.find((p) => p.id === reqProfId);
+          if (candidate && (!candidate.isAdmin || session.role === 'admin')) {
+            activeProfile = candidate;
+          }
+        }
+      }
+
       const allBooks = scanAllBooks();
       const candidates = [];
       for (const b of allBooks) {
         if (b.format !== 'images') continue;
+        if (isBookHiddenForProfile(session, activeProfile, b.id, b)) continue;
         const contentOnly = b.pages.filter((p) => p.type === 'page' && p.url);
         const pool = contentOnly.length > 0 ? contentOnly : b.pages.filter((p) => p.url);
         for (const p of pool) {
@@ -1544,16 +3041,28 @@ const server = http.createServer(async (req, res) => {
 
     // ==================== BOOKS & LIBRARY API ====================
     if (pathname === '/api/books' && req.method === 'GET') {
-      const config = getConfig();
-      const { profile } = getProfileById(profileId);
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { profile } = resolvedProfile;
       const allBooks = scanAllBooks();
+      const visibleBooks = allBooks.filter(
+        (book) => !isBookHiddenForProfile(session, profile, book.id, book)
+      );
 
-      const summarized = allBooks.map((book) => {
-        const prog = profile.progress[book.id] || null;
-        const bms = profile.bookmarks[book.id] || [];
+      const summarized = visibleBooks.map((book) => {
+        const prog = Object.hasOwn(profile.progress, book.id) ? profile.progress[book.id] : null;
+        const bms = Object.hasOwn(profile.bookmarks, book.id) ? profile.bookmarks[book.id] : [];
         return {
           id: book.id,
           title: book.title,
+          originalTitle: book.originalTitle || book.id,
+          customTitle: book.customTitle || '',
+          adminOnly: Boolean(book.adminOnly),
           format: book.format || 'images',
           ebookUrl: book.ebookUrl || null,
           sizeScale: book.sizeScale || 1.0,
@@ -1571,47 +3080,53 @@ const server = http.createServer(async (req, res) => {
 
       return sendJson(res, 200, {
         books: summarized,
-        profile: {
-          id: profile.id,
-          name: profile.name,
-          avatar: profile.avatar,
-          color: profile.color
-        },
-        preferences: profile.preferences,
-        serverInfo: {
-          booksDir: config.booksDir,
-          port: PORT,
-          lanIps: getLanAddresses()
-        }
+        profile: sanitizeProfileSummary(profile, session.role === 'admin'),
+        isAdmin: session.role === 'admin',
+        preferences: profile.preferences
       });
     }
 
-    // API: Cache rendered cover image + page count for PDF/EPUB books
+    // API (Admin-only): Cache rendered cover image + page count for PDF/EPUB books
     if (pathname.startsWith('/api/books/') && pathname.endsWith('/cover-cache') && req.method === 'POST') {
-      const bookId = decodeURIComponent(
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+      const bookId = safeDecodeURIComponent(
         pathname.slice('/api/books/'.length, pathname.length - '/cover-cache'.length)
       );
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const body = await readRequestBody(req, 15 * 1024 * 1024);
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
 
-      if (typeof body.dataUrl === 'string' && body.dataUrl.startsWith('data:image/')) {
-        const base64Part = body.dataUrl.split(',')[1];
-        if (base64Part) {
-          const buf = Buffer.from(base64Part, 'base64');
-          const coverCacheFile = safeCoverCachePath(safeFolder);
-          fs.writeFileSync(coverCacheFile, buf);
-          imageDimCache.delete(coverCacheFile);
+      const config = getRuntimeConfig();
+      const existing = parseBookFolder(config.booksDir, bookId);
+      if (!existing) {
+        return sendJson(res, 404, { error: 'Bok ikke funnet' });
+      }
+
+      const body = await readRequestBody(req, 8 * 1024 * 1024);
+
+      if (typeof body.dataUrl === 'string') {
+        const match = body.dataUrl.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
+        if (!match) {
+          return sendJson(res, 400, { error: 'Ugyldig bildeformat for omslag' });
         }
+        const buf = Buffer.from(match[2], 'base64');
+        if (buf.length === 0 || buf.length > MAX_COVER_BYTES || !isValidImageBuffer(buf)) {
+          return sendJson(res, 400, { error: 'Ugyldig eller for stort omslagsbilde (maks 5 MB)' });
+        }
+        const coverCacheFile = safeCoverCachePath(bookId);
+        fs.writeFileSync(coverCacheFile, buf);
+        imageDimCache.delete(coverCacheFile);
       }
 
-      if (typeof body.pageCount === 'number' && body.pageCount > 0) {
-        const currentMeta = loadBookMeta(config.booksDir, safeFolder);
-        currentMeta.pageCount = Math.round(body.pageCount);
-        saveBookMeta(config.booksDir, safeFolder, currentMeta);
+      if (typeof body.pageCount === 'number' && Number.isFinite(body.pageCount) && body.pageCount > 0) {
+        const currentMeta = loadBookMeta(config.booksDir, bookId);
+        currentMeta.pageCount = Math.min(20000, Math.round(body.pageCount));
+        saveBookMeta(config.booksDir, bookId, currentMeta);
       }
 
-      const updatedBook = parseBookFolder(config.booksDir, safeFolder);
+      const updatedBook = parseBookFolder(config.booksDir, bookId);
       return sendJson(res, 200, {
         ok: true,
         covers: updatedBook ? updatedBook.covers : null,
@@ -1619,78 +3134,138 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // API: Upload an .epub or .pdf file directly into booksDir
+    // API (Admin-only): Stream-upload a raw .epub or .pdf file directly into booksDir
     if (pathname === '/api/upload-ebook' && req.method === 'POST') {
-      const body = await readRequestBody(req, 160 * 1024 * 1024);
-      const rawName = path.basename(String(body.filename || ''));
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+      const rawHeaderName = safeDecodeURIComponent(String(req.headers['x-filename'] || ''));
+      const rawName = rawHeaderName ? path.basename(rawHeaderName.trim()) : '';
+      if (!isValidBookId(rawName)) {
+        return sendJson(res, 400, { error: 'Ugyldig filnavn' });
+      }
       const ext = path.extname(rawName).toLowerCase();
       if (!EBOOK_EXTENSIONS.has(ext)) {
         return sendJson(res, 400, { error: 'Kun .epub og .pdf støttes' });
       }
-      if (typeof body.dataBase64 !== 'string' || !body.dataBase64) {
-        return sendJson(res, 400, { error: 'Mangler fildata' });
+
+      const config = getRuntimeConfig();
+      if (!fs.existsSync(config.booksDir) || !fs.statSync(config.booksDir).isDirectory()) {
+        return sendJson(res, 500, { error: 'Bokmappen er ikke tilgjengelig' });
       }
-      const config = getConfig();
+
       const targetPath = path.join(config.booksDir, rawName);
-      const fileBuf = Buffer.from(body.dataBase64, 'base64');
-      fs.writeFileSync(targetPath, fileBuf);
+      if (!isPathInsideDir(config.booksDir, targetPath, { allowMissingLeaf: true })) {
+        return sendJson(res, 400, { error: 'Ugyldig filplassering' });
+      }
+
+      const overwrite = req.headers['x-overwrite'] === 'true';
+      if (fs.existsSync(targetPath) && !overwrite) {
+        return sendJson(res, 409, { error: 'En bok med dette filnavnet finnes allerede' });
+      }
+
+      const tmpName = `.upload-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.tmp`;
+      const tmpPath = path.join(config.booksDir, tmpName);
+
+      await streamBinaryUploadToFile(req, tmpPath, ext, MAX_UPLOAD_BYTES);
+
+      if (fs.existsSync(targetPath) && !overwrite) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore
+        }
+        return sendJson(res, 409, { error: 'En bok med dette filnavnet finnes allerede' });
+      }
+
+      fs.renameSync(tmpPath, targetPath);
       return sendJson(res, 200, { ok: true, id: rawName });
     }
 
-    // API: Shared Book Metadata (forsatsAlene, sizeScale & chapters for all users)
+    // API (Admin-only): Shared Book Metadata (title, adminOnly, forsatsAlene, sizeScale & chapters)
     if (pathname.startsWith('/api/books/') && pathname.endsWith('/meta') && req.method === 'POST') {
-      const bookId = decodeURIComponent(
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+      const bookId = safeDecodeURIComponent(
         pathname.slice('/api/books/'.length, pathname.length - '/meta'.length)
       );
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const currentMeta = loadBookMeta(config.booksDir, safeFolder);
-      const body = await readRequestBody(req);
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
 
+      const config = getRuntimeConfig();
+      const existingBook = parseBookFolder(config.booksDir, bookId);
+      if (!existingBook) {
+        return sendJson(res, 404, { error: 'Bok ikke funnet' });
+      }
+
+      const currentMeta = loadBookMeta(config.booksDir, bookId);
+      const body = await readRequestBody(req, 256 * 1024);
+
+      if (typeof body.title === 'string') {
+        currentMeta.title = body.title.trim().slice(0, 140);
+      }
+      if (typeof body.adminOnly === 'boolean') {
+        currentMeta.adminOnly = body.adminOnly;
+      }
       if (typeof body.forsatsAlene === 'boolean') {
         currentMeta.forsatsAlene = body.forsatsAlene;
       }
-      if (typeof body.sizeScale === 'number') {
+      if (typeof body.sizeScale === 'number' && Number.isFinite(body.sizeScale)) {
         currentMeta.sizeScale = Math.max(0.5, Math.min(1.5, body.sizeScale));
       }
-      if (typeof body.pageCount === 'number' && body.pageCount > 0) {
-        currentMeta.pageCount = Math.round(body.pageCount);
+      if (typeof body.pageCount === 'number' && Number.isFinite(body.pageCount) && body.pageCount > 0) {
+        currentMeta.pageCount = Math.min(20000, Math.round(body.pageCount));
       }
       if (Array.isArray(body.chapters)) {
         currentMeta.chapters = body.chapters;
       }
 
-      const saved = saveBookMeta(config.booksDir, safeFolder, currentMeta);
-      const updatedBook = parseBookFolder(config.booksDir, safeFolder);
+      const saved = saveBookMeta(config.booksDir, bookId, currentMeta);
+      const updatedBook = parseBookFolder(config.booksDir, bookId);
       return sendJson(res, 200, {
         ok: true,
+        id: bookId,
+        title: updatedBook ? updatedBook.title : existingBook.title,
+        originalTitle: updatedBook ? updatedBook.originalTitle : existingBook.originalTitle,
+        customTitle: updatedBook ? updatedBook.customTitle : saved.meta.title || '',
+        adminOnly: Boolean(saved.meta.adminOnly),
         forsatsAlene: saved.meta.forsatsAlene,
         sizeScale: saved.meta.sizeScale,
-        chapters: updatedBook ? updatedBook.chapters : saved.meta.chapters,
-        bookJsonPath: saved.bookJsonPath
+        chapters: updatedBook ? updatedBook.chapters : saved.meta.chapters
       });
     }
 
-    // API: Add or update a shared chapter in book.json
+    // API (Admin-only): Add or update a shared chapter
     if (pathname.startsWith('/api/books/') && pathname.endsWith('/chapters') && req.method === 'POST') {
-      const bookId = decodeURIComponent(
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
+      const bookId = safeDecodeURIComponent(
         pathname.slice('/api/books/'.length, pathname.length - '/chapters'.length)
       );
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const book = parseBookFolder(config.booksDir, safeFolder);
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
+
+      const config = getRuntimeConfig();
+      const book = parseBookFolder(config.booksDir, bookId);
       if (!book) {
         return sendJson(res, 404, { error: 'Bok ikke funnet' });
       }
 
-      const body = await readRequestBody(req);
+      const body = await readRequestBody(req, 32 * 1024);
       const pageIndex = Math.max(0, Math.min(book.totalPages - 1, parseInt(body.pageIndex, 10) || 0));
-      const title = String(body.title || '').trim().slice(0, 140) || `Kapittel (Side ${pageIndex + 1})`;
+      const title =
+        typeof body.title === 'string' && body.title.trim()
+          ? body.title.trim().slice(0, 140)
+          : `Kapittel (Side ${pageIndex + 1})`;
       const pageObj = book.pages[pageIndex];
 
-      const currentMeta = loadBookMeta(config.booksDir, safeFolder);
+      const currentMeta = loadBookMeta(config.booksDir, bookId);
       const existingIdx = currentMeta.chapters.findIndex(
-        (c) => (body.id && c.id === body.id) || c.pageIndex === pageIndex
+        (c) => (typeof body.id === 'string' && body.id && c.id === body.id) || c.pageIndex === pageIndex
       );
 
       if (existingIdx !== -1) {
@@ -1698,6 +3273,9 @@ const server = http.createServer(async (req, res) => {
         currentMeta.chapters[existingIdx].pageIndex = pageIndex;
         currentMeta.chapters[existingIdx].pageFile = pageObj ? pageObj.filename : undefined;
       } else {
+        if (currentMeta.chapters.length >= 500) {
+          return sendJson(res, 400, { error: 'Maks 500 kapitler per bok' });
+        }
         currentMeta.chapters.push({
           id: `ch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           title,
@@ -1706,28 +3284,38 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      saveBookMeta(config.booksDir, safeFolder, currentMeta);
-      const updatedBook = parseBookFolder(config.booksDir, safeFolder);
+      saveBookMeta(config.booksDir, bookId, currentMeta);
+      const updatedBook = parseBookFolder(config.booksDir, bookId);
       return sendJson(res, 200, {
         ok: true,
         chapters: updatedBook ? updatedBook.chapters : currentMeta.chapters
       });
     }
 
-    // API: Delete shared chapter
+    // API (Admin-only): Delete shared chapter
     if (pathname.startsWith('/api/books/') && pathname.includes('/chapters/') && req.method === 'DELETE') {
+      if (session.role !== 'admin') {
+        return sendJson(res, 403, { error: 'Krever admin-tilgang' });
+      }
       const rest = pathname.slice('/api/books/'.length);
       const splitIdx = rest.indexOf('/chapters/');
-      const bookId = decodeURIComponent(rest.slice(0, splitIdx));
-      const chapterId = decodeURIComponent(rest.slice(splitIdx + '/chapters/'.length));
+      const bookId = safeDecodeURIComponent(rest.slice(0, splitIdx));
+      const chapterId = safeDecodeURIComponent(rest.slice(splitIdx + '/chapters/'.length));
+      if (!isValidBookId(bookId) || !chapterId) {
+        return sendJson(res, 400, { error: 'Ugyldig bok- eller kapittel-ID' });
+      }
 
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const currentMeta = loadBookMeta(config.booksDir, safeFolder);
+      const config = getRuntimeConfig();
+      const existingBook = parseBookFolder(config.booksDir, bookId);
+      if (!existingBook) {
+        return sendJson(res, 404, { error: 'Bok ikke funnet' });
+      }
+
+      const currentMeta = loadBookMeta(config.booksDir, bookId);
       currentMeta.chapters = currentMeta.chapters.filter((c) => c.id !== chapterId);
-      saveBookMeta(config.booksDir, safeFolder, currentMeta);
+      saveBookMeta(config.booksDir, bookId, currentMeta);
 
-      const updatedBook = parseBookFolder(config.booksDir, safeFolder);
+      const updatedBook = parseBookFolder(config.booksDir, bookId);
       return sendJson(res, 200, {
         ok: true,
         chapters: updatedBook ? updatedBook.chapters : currentMeta.chapters
@@ -1736,29 +3324,58 @@ const server = http.createServer(async (req, res) => {
 
     // API: Single book detail
     if (pathname.startsWith('/api/books/') && req.method === 'GET') {
-      const bookId = decodeURIComponent(pathname.slice('/api/books/'.length));
-      const config = getConfig();
-      const safeFolder = path.basename(bookId);
-      const book = parseBookFolder(config.booksDir, safeFolder);
-      if (!book) {
+      const bookId = safeDecodeURIComponent(pathname.slice('/api/books/'.length));
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
+
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { profile } = resolvedProfile;
+
+      const config = getRuntimeConfig();
+      const book = parseBookFolder(config.booksDir, bookId);
+      if (!book || isBookHiddenForProfile(session, profile, book.id, book)) {
         return sendJson(res, 404, { error: 'Bok ikke funnet' });
       }
-      const { profile } = getProfileById(profileId);
+
       return sendJson(res, 200, {
         ...book,
-        bookJsonPath: path.join(config.booksDir, safeFolder, 'book.json'),
-        progress: profile.progress[book.id] || null,
-        bookmarks: profile.bookmarks[book.id] || [],
+        isAdmin: session.role === 'admin',
+        progress: Object.hasOwn(profile.progress, book.id) ? profile.progress[book.id] : null,
+        bookmarks: Object.hasOwn(profile.bookmarks, book.id) ? profile.bookmarks[book.id] : [],
         preferences: profile.preferences
       });
     }
 
     // API: Save reading progress for a book (per profile)
     if (pathname.startsWith('/api/progress/') && req.method === 'POST') {
-      const bookId = decodeURIComponent(pathname.slice('/api/progress/'.length));
-      const body = await readRequestBody(req);
-      const { data, profile } = getProfileById(profileId);
+      const bookId = safeDecodeURIComponent(pathname.slice('/api/progress/'.length));
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
 
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { data, profile } = resolvedProfile;
+
+      const config = getRuntimeConfig();
+      const book = parseBookFolder(config.booksDir, bookId);
+      if (!book || isBookHiddenForProfile(session, profile, book.id, book)) {
+        return sendJson(res, 404, { error: 'Bok ikke funnet' });
+      }
+
+      const body = await readRequestBody(req, 16 * 1024);
       const pageIndex = Math.max(0, parseInt(body.pageIndex, 10) || 0);
       const totalPages = Math.max(1, parseInt(body.totalPages, 10) || 1);
       const completed = Boolean(body.completed) || pageIndex >= totalPages - 1;
@@ -1776,25 +3393,48 @@ const server = http.createServer(async (req, res) => {
 
     // API: Add or update bookmark for a book (per profile)
     if (pathname.startsWith('/api/bookmarks/') && req.method === 'POST') {
-      const bookId = decodeURIComponent(pathname.slice('/api/bookmarks/'.length));
-      const body = await readRequestBody(req);
-      const { data, profile } = getProfileById(profileId);
+      const bookId = safeDecodeURIComponent(pathname.slice('/api/bookmarks/'.length));
+      if (!isValidBookId(bookId)) {
+        return sendJson(res, 400, { error: 'Ugyldig bok-ID' });
+      }
 
-      if (!profile.bookmarks[bookId]) {
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { data, profile } = resolvedProfile;
+
+      const config = getRuntimeConfig();
+      const book = parseBookFolder(config.booksDir, bookId);
+      if (!book || isBookHiddenForProfile(session, profile, book.id, book)) {
+        return sendJson(res, 404, { error: 'Bok ikke funnet' });
+      }
+
+      const body = await readRequestBody(req, 16 * 1024);
+      if (!Object.hasOwn(profile.bookmarks, bookId) || !Array.isArray(profile.bookmarks[bookId])) {
         profile.bookmarks[bookId] = [];
       }
 
       const pageIndex = Math.max(0, parseInt(body.pageIndex, 10) || 0);
       const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
-      const pageLabel = typeof body.pageLabel === 'string' ? body.pageLabel : `Side ${pageIndex + 1}`;
+      const pageLabel =
+        typeof body.pageLabel === 'string'
+          ? body.pageLabel.trim().slice(0, 60)
+          : `Side ${pageIndex + 1}`;
 
       const existingIdx = profile.bookmarks[bookId].findIndex((b) => b.pageIndex === pageIndex);
-      if (existingIdx !== -1 && body.toggle && !body.note) {
+      if (existingIdx !== -1 && body.toggle && !note) {
         profile.bookmarks[bookId].splice(existingIdx, 1);
       } else if (existingIdx !== -1) {
         profile.bookmarks[bookId][existingIdx].note = note;
         profile.bookmarks[bookId][existingIdx].updatedAt = new Date().toISOString();
       } else {
+        if (profile.bookmarks[bookId].length >= 200) {
+          return sendJson(res, 400, { error: 'Maks 200 bokmerker per bok' });
+        }
         profile.bookmarks[bookId].push({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           pageIndex,
@@ -1813,50 +3453,58 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/bookmarks/') && req.method === 'DELETE') {
       const rest = pathname.slice('/api/bookmarks/'.length);
       const parts = rest.split('/');
-      const bookId = decodeURIComponent(parts[0] || '');
-      const bookmarkId = decodeURIComponent(parts[1] || '');
-      const { data, profile } = getProfileById(profileId);
+      const bookId = safeDecodeURIComponent(parts[0] || '');
+      const bookmarkId = safeDecodeURIComponent(parts[1] || '');
+      if (!isValidBookId(bookId) || !bookmarkId) {
+        return sendJson(res, 400, { error: 'Ugyldig bok- eller bokmerke-ID' });
+      }
 
-      if (profile.bookmarks[bookId]) {
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { data, profile } = resolvedProfile;
+
+      if (Object.hasOwn(profile.bookmarks, bookId) && Array.isArray(profile.bookmarks[bookId])) {
         profile.bookmarks[bookId] = profile.bookmarks[bookId].filter((b) => b.id !== bookmarkId);
         saveJson(PROFILES_FILE, data);
       }
-      return sendJson(res, 200, { ok: true, bookmarks: profile.bookmarks[bookId] || [] });
+      return sendJson(res, 200, {
+        ok: true,
+        bookmarks: Object.hasOwn(profile.bookmarks, bookId) ? profile.bookmarks[bookId] : []
+      });
     }
 
-    // API: Save user preferences (per profile)
+    // API: Save user preferences (per profile, strict allowlist)
     if (pathname === '/api/preferences' && req.method === 'POST') {
-      const body = await readRequestBody(req);
-      const { data, profile } = getProfileById(profileId);
-      profile.preferences = {
+      const body = await readRequestBody(req, 16 * 1024);
+      for (const k of Object.keys(body)) {
+        if (!ALLOWED_PREF_KEYS.has(k) || FORBIDDEN_KEYS.has(k)) {
+          return sendJson(res, 400, { error: 'Ugyldig innstillingsnøkkel' });
+        }
+      }
+
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        return sendJson(res, resolvedProfile.error, {
+          error: resolvedProfile.message,
+          requireAdmin: Boolean(resolvedProfile.requireAdmin)
+        });
+      }
+      const { data, profile } = resolvedProfile;
+
+      profile.preferences = sanitizePreferences({
         ...profile.preferences,
         ...body
-      };
+      });
       saveJson(PROFILES_FILE, data);
       return sendJson(res, 200, { ok: true, preferences: profile.preferences });
     }
 
-    // API: Update server config (e.g. booksDir)
-    if (pathname === '/api/config' && req.method === 'POST') {
-      const body = await readRequestBody(req);
-      const config = getConfig();
-      if (typeof body.booksDir === 'string' && body.booksDir.trim()) {
-        const candidate = path.resolve(body.booksDir.trim());
-        if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) {
-          return sendJson(res, 400, {
-            error: `Mappen finnes ikke: ${candidate}`
-          });
-        }
-        config.booksDir = candidate;
-      }
-      if (typeof body.password === 'string' && body.password.trim()) {
-        config.password = body.password.trim();
-      }
-      saveJson(CONFIG_FILE, config);
-      return sendJson(res, 200, { ok: true, config: { booksDir: config.booksDir } });
-    }
-
-    // Serve internal EPUB assets: /epub-resource/:bookId/:internalPath
+    // ==================== EPUB INTERNAL SAFE ASSETS ====================
     if (pathname.startsWith('/epub-resource/') && req.method === 'GET') {
       const parts = pathname.slice('/epub-resource/'.length).split('/');
       if (parts.length < 2) {
@@ -1864,10 +3512,43 @@ const server = http.createServer(async (req, res) => {
         res.end('Ugyldig EPUB-ressurs');
         return;
       }
-      const bookId = path.basename(decodeURIComponent(parts[0]));
-      const internalPath = decodeURIComponent(parts.slice(1).join('/'));
-      const config = getConfig();
+      const bookId = safeDecodeURIComponent(parts[0]);
+      const internalPath = safeDecodeURIComponent(parts.slice(1).join('/'));
+      if (!isValidBookId(bookId) || !internalPath || internalPath.includes('\0')) {
+        res.writeHead(400);
+        res.end('Ugyldig EPUB-ressurs');
+        return;
+      }
+
+      const ext = path.extname(internalPath).toLowerCase();
+      if (!EPUB_SAFE_ASSET_EXTS.has(ext)) {
+        res.writeHead(403);
+        res.end('Filtype ikke tillatt');
+        return;
+      }
+
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        res.writeHead(resolvedProfile.error);
+        res.end('Ingen tilgang');
+        return;
+      }
+
+      const config = getRuntimeConfig();
+      const bookMeta = loadBookMeta(config.booksDir, bookId);
+      if (isBookHiddenForProfile(session, resolvedProfile.profile, bookId, bookMeta)) {
+        res.writeHead(404);
+        res.end('EPUB ikke funnet');
+        return;
+      }
+
       const targetPath = path.join(config.booksDir, bookId);
+      if (!isPathInsideDir(config.booksDir, targetPath)) {
+        res.writeHead(403);
+        res.end('Ingen tilgang');
+        return;
+      }
+
       let epubFile = null;
       if (fs.existsSync(targetPath)) {
         const st = fs.statSync(targetPath);
@@ -1878,11 +3559,12 @@ const server = http.createServer(async (req, res) => {
           if (found) epubFile = path.join(targetPath, found);
         }
       }
-      if (!epubFile) {
+      if (!epubFile || !isPathInsideDir(config.booksDir, epubFile)) {
         res.writeHead(404);
         res.end('EPUB ikke funnet');
         return;
       }
+
       const zip = readZipArchive(epubFile);
       const dataBuf = zip.extractEntry ? zip.extractEntry(internalPath) : null;
       if (!dataBuf) {
@@ -1890,17 +3572,17 @@ const server = http.createServer(async (req, res) => {
         res.end('Ressurs ikke funnet i EPUB');
         return;
       }
-      const ext = path.extname(internalPath).toLowerCase();
+
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
       res.writeHead(200, {
         'Content-Type': contentType,
         'Content-Length': dataBuf.length,
-        'Cache-Control': 'public, max-age=86400'
+        'Cache-Control': 'private, max-age=3600'
       });
       return res.end(dataBuf);
     }
 
-    // Serve book image / ebook files: /book-media/:bookId/:filename
+    // ==================== BOOK MEDIA (STRICT EXTENSION + CONTAINMENT) ====================
     if (pathname.startsWith('/book-media/') && req.method === 'GET') {
       const parts = pathname.slice('/book-media/'.length).split('/');
       if (parts.length < 2) {
@@ -1908,67 +3590,141 @@ const server = http.createServer(async (req, res) => {
         res.end('Ugyldig bilde-URL');
         return;
       }
-      const bookId = path.basename(decodeURIComponent(parts[0]));
-      const filename = path.basename(decodeURIComponent(parts.slice(1).join('/')));
-      const config = getConfig();
+      const bookId = safeDecodeURIComponent(parts[0]);
+      const rawFilename = safeDecodeURIComponent(parts.slice(1).join('/'));
+      if (!isValidBookId(bookId) || !rawFilename || rawFilename.includes('/') || rawFilename.includes('\\') || rawFilename.includes('\0')) {
+        res.writeHead(400);
+        res.end('Ugyldig bok- eller filnavn');
+        return;
+      }
 
-      if (filename === '__cover') {
+      const resolvedProfile = resolveRequestProfile(session, req, parsedUrl);
+      if (resolvedProfile.error) {
+        res.writeHead(resolvedProfile.error);
+        res.end('Ingen tilgang');
+        return;
+      }
+
+      const config = getRuntimeConfig();
+      const bookMeta = loadBookMeta(config.booksDir, bookId);
+      if (isBookHiddenForProfile(session, resolvedProfile.profile, bookId, bookMeta)) {
+        res.writeHead(404);
+        res.end('Bok ikke funnet');
+        return;
+      }
+
+      if (rawFilename === '__cover') {
+        const book = parseBookFolder(config.booksDir, bookId);
+        if (!book) {
+          res.writeHead(404);
+          res.end('Bok ikke funnet');
+          return;
+        }
         const coverCacheFile = safeCoverCachePath(bookId);
-        if (fs.existsSync(coverCacheFile)) {
-          return serveFile(req, res, coverCacheFile, 'public, max-age=3600');
+        if (fs.existsSync(coverCacheFile) && isPathInsideDir(COVERS_CACHE_DIR, coverCacheFile)) {
+          return serveFile(req, res, coverCacheFile, 'private, max-age=3600');
         }
         res.writeHead(404);
         res.end('Omslag ikke funnet');
         return;
       }
 
-      if (filename === '__ebook') {
+      if (rawFilename === '__ebook') {
+        const ext = path.extname(bookId).toLowerCase();
+        if (!EBOOK_EXTENSIONS.has(ext)) {
+          res.writeHead(403);
+          res.end('Filtype ikke tillatt');
+          return;
+        }
         const directFile = path.join(config.booksDir, bookId);
-        const resolvedBooksDir = path.resolve(config.booksDir);
-        const resolvedDirect = path.resolve(directFile);
-        if (resolvedDirect.startsWith(resolvedBooksDir) && fs.existsSync(resolvedDirect) && fs.statSync(resolvedDirect).isFile()) {
-          return serveFile(req, res, resolvedDirect, 'public, max-age=86400');
+        if (isPathInsideDir(config.booksDir, directFile) && fs.statSync(directFile).isFile()) {
+          return serveFile(req, res, directFile, 'private, max-age=3600');
         }
         res.writeHead(404);
         res.end('E-bok ikke funnet');
         return;
       }
 
-      const filePath = path.join(config.booksDir, bookId, filename);
+      if (!isValidBookId(rawFilename)) {
+        res.writeHead(400);
+        res.end('Ugyldig filnavn');
+        return;
+      }
 
-      const resolvedBooksDir = path.resolve(config.booksDir);
-      const resolvedFile = path.resolve(filePath);
-      if (!resolvedFile.startsWith(resolvedBooksDir)) {
+      const fileExt = path.extname(rawFilename).toLowerCase();
+      if (!IMAGE_EXTENSIONS.has(fileExt) && !EBOOK_EXTENSIONS.has(fileExt)) {
+        res.writeHead(403);
+        res.end('Filtype ikke tillatt');
+        return;
+      }
+
+      const filePath = path.join(config.booksDir, bookId, rawFilename);
+      if (!isPathInsideDir(config.booksDir, filePath)) {
         res.writeHead(403);
         res.end('Ingen tilgang');
         return;
       }
 
-      return serveFile(req, res, resolvedFile, 'public, max-age=86400');
+      return serveFile(req, res, filePath, 'private, max-age=3600');
     }
 
-    // Serve static frontend files
-    let staticPath = pathname === '/' ? '/index.html' : pathname;
-    const resolvedStatic = path.resolve(PUBLIC_DIR, '.' + staticPath);
-    if (!resolvedStatic.startsWith(path.resolve(PUBLIC_DIR))) {
+    // Reject unknown API routes explicitly as 404 JSON instead of serving index.html
+    if (pathname.startsWith('/api/')) {
+      return sendJson(res, 404, { error: 'Endepunkt ikke funnet' });
+    }
+
+    // ==================== STATIC FRONTEND FILES ====================
+    const decodedStatic = safeDecodeURIComponent(pathname);
+    if (decodedStatic === null || decodedStatic.includes('\0')) {
+      res.writeHead(400);
+      res.end('Ugyldig sti');
+      return;
+    }
+
+    const relStatic = decodedStatic === '/' ? 'index.html' : decodedStatic.replace(/^\/+/, '');
+    const publicRoot = path.resolve(PUBLIC_DIR);
+    const resolvedStatic = path.resolve(publicRoot, relStatic);
+    const publicPrefix = publicRoot.endsWith(path.sep) ? publicRoot : publicRoot + path.sep;
+
+    if (resolvedStatic !== publicRoot && !resolvedStatic.startsWith(publicPrefix)) {
       res.writeHead(403);
       res.end('Ingen tilgang');
       return;
     }
 
-    if (fs.existsSync(resolvedStatic) && fs.statSync(resolvedStatic).isFile()) {
+    if (
+      fs.existsSync(resolvedStatic) &&
+      isPathInsideDir(PUBLIC_DIR, resolvedStatic) &&
+      fs.statSync(resolvedStatic).isFile()
+    ) {
       return serveFile(req, res, resolvedStatic, 'no-store, no-cache, must-revalidate, max-age=0');
     }
 
-    return serveFile(req, res, path.join(PUBLIC_DIR, 'index.html'), 'no-store, no-cache, must-revalidate, max-age=0');
+    return serveFile(
+      req,
+      res,
+      path.join(PUBLIC_DIR, 'index.html'),
+      'no-store, no-cache, must-revalidate, max-age=0'
+    );
   } catch (err) {
+    if (err instanceof HttpError) {
+      return sendJson(res, err.statusCode, { error: err.message });
+    }
     console.error('Serverfeil:', err);
-    sendJson(res, 500, { error: 'Intern serverfeil', details: err.message });
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: 'Intern serverfeil' });
+    } else {
+      res.end();
+    }
   }
 });
 
+server.headersTimeout = 15_000;
+server.requestTimeout = 120_000;
+server.keepAliveTimeout = 10_000;
+
 server.listen(PORT, '0.0.0.0', () => {
-  const config = getConfig();
+  const config = getRuntimeConfig();
   const lanIps = getLanAddresses();
   console.log('==================================================');
   console.log('  BOKAMI - Minimalistisk Bokleser');
@@ -1979,6 +3735,20 @@ server.listen(PORT, '0.0.0.0', () => {
     lanIps.forEach((ip) => {
       console.log(`  Mobil/LAN : http://${ip}:${PORT}`);
     });
+  }
+  if (startupNotices.generatedReaderPassword) {
+    console.log('--------------------------------------------------');
+    console.log(`  [NYTT LESERPASSORD] : ${startupNotices.generatedReaderPassword}`);
+  }
+  if (startupNotices.generatedAdminPassword) {
+    console.log('--------------------------------------------------');
+    console.log(`  [NYTT ADMIN-PASSORD] : ${startupNotices.generatedAdminPassword}`);
+    console.log('  Lagre dette passordet eller sett BOKAMI_ADMIN_PASSWORD!');
+  }
+  if (startupNotices.defaultReaderPasswordWarning) {
+    console.log('--------------------------------------------------');
+    console.log('  ADVARSEL: Leserpassordet er fortsatt standard ("passord").');
+    console.log('  Endre det i Admin-panelet (Innstillinger) snarest!');
   }
   console.log('==================================================');
 });

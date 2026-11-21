@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0d1014" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=7" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=8" />
   <title>Bokami</title>
-  <link rel="stylesheet" href="/styles.css?v=7" />
+  <link rel="stylesheet" href="/styles.css?v=8" />
 </head>
 <body>
   <!-- ======================== AMBIENT HEAVILY-TINTED RANDOM PAGE BACKDROP ======================== -->
@@ -25,7 +25,7 @@
       </div>
       <h2>Passord</h2>
       <div class="password-form">
-        <input type="password" id="password-input" class="text-input" placeholder='Skriv inn "passord"' autocomplete="current-password" />
+        <input type="password" id="password-input" class="text-input" placeholder="Skriv inn passord" autocomplete="current-password" />
         <button type="button" class="btn btn-primary" id="btn-password-submit">Lås opp</button>
       </div>
       <p class="password-error hidden" id="password-error">Feil passord</p>
@@ -41,6 +41,8 @@
 
       <div class="profile-footer-actions">
         <button type="button" class="btn" id="btn-manage-profiles">Rediger profiler</button>
+        <button type="button" class="btn" id="btn-profile-admin-unlock">Admin-innlogging</button>
+        <button type="button" class="btn" id="btn-logout-profile-screen">Logg ut</button>
       </div>
     </div>
   </div>
@@ -93,7 +95,7 @@
           </svg>
         </button>
 
-        <button type="button" class="btn btn-icon" id="btn-settings" title="Server- og mappeinnstillinger">
+        <button type="button" class="btn btn-icon" id="btn-settings" title="Innstillinger og admin">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
             <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.973 7.973 0 0 1-.704 1.218c-.428.609-1.176.806-1.82.63l-1.103-.303c-.066-.019-.176-.011-.299.071a5.903 5.903 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.645-.716 1.195-1.459 1.26a8.094 8.094 0 0 1-1.402 0c-.743-.065-1.289-.615-1.459-1.26l-.288-1.107c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.364-1.891l.814-.806c.049-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.814-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.218c.428-.609 1.176-.806 1.82-.63l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.009.645 6.556.095 7.299.03 7.532.01 7.766 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.03.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"></path>
           </svg>
@@ -157,7 +159,7 @@
                 <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"></path>
               </svg>
             </button>
-            <div class="size-scale-control" title="Bokstørrelse i hylla (lagres for boka)">
+            <div class="size-scale-control" id="carousel-size-control" title="Bokstørrelse i hylla (lagres for boka)">
               <button type="button" class="btn btn-icon btn-sm" id="btn-scale-down" title="Mindre bok i hylla">−</button>
               <span class="size-scale-label" id="carousel-scale-label">100%</span>
               <button type="button" class="btn btn-icon btn-sm" id="btn-scale-up" title="Større bok i hylla">+</button>
@@ -170,8 +172,8 @@
       <div id="empty-state" class="empty-state hidden">
         <div class="empty-box">
           <h3>Ingen bøker funnet</h3>
-          <p id="empty-state-desc">Legg bokmapper med <code>c1.jpg</code> (Forsats), <code>c2.jpg</code> (Rygg), <code>c3.jpg</code> (Baksats) og <code>0001.jpg</code>... i bokmappen.</p>
-          <button type="button" class="btn btn-primary" id="btn-empty-settings">Velg bokmappe</button>
+          <p id="empty-state-desc">Ingen bøker er tilgjengelige for denne profilen.</p>
+          <button type="button" class="btn btn-primary" id="btn-empty-settings">Innstillinger</button>
         </div>
       </div>
     </main>
@@ -249,7 +251,7 @@
               <span class="popover-hint">Lagres for denne boka</span>
             </div>
 
-            <div class="popover-section">
+            <div class="popover-section" id="popover-scale-section">
               <div class="popover-row">
                 <span class="popover-label">Størrelse i bokhylla</span>
                 <div class="size-scale-control">
@@ -289,7 +291,7 @@
 
           <!-- TAB 1: SHARED CHAPTERS (Saved in book.json for everyone) -->
           <div class="drawer-pane active" id="drawer-pane-chapters">
-            <div class="drawer-add-form">
+            <div class="drawer-add-form" id="chapter-add-form">
               <input type="text" id="chapter-title-input" placeholder="Nytt kapittel på denne siden..." maxlength="120" />
               <button type="button" class="btn btn-primary btn-sm" id="btn-save-chapter">Lagre</button>
             </div>
@@ -301,7 +303,7 @@
 
           <!-- TAB 2: PERSONAL BOOKMARKS (Saved only on active profile) -->
           <div class="drawer-pane" id="drawer-pane-bookmarks">
-            <div class="drawer-add-form">
+            <div class="drawer-add-form" id="bookmark-add-form">
               <input type="text" id="bookmark-note-input" placeholder="Notat på denne siden..." maxlength="120" />
               <button type="button" class="btn btn-primary btn-sm" id="btn-save-bookmark-note">Lagre</button>
             </div>
@@ -440,52 +442,121 @@
     </div>
   </div>
 
-  <!-- ======================== SETTINGS & SERVER MODAL ======================== -->
-  <div class="modal-backdrop hidden" id="settings-modal">
-    <div class="modal">
+  <!-- ======================== ADMIN UNLOCK MODAL ======================== -->
+  <div class="modal-backdrop hidden" id="admin-login-modal">
+    <div class="modal" style="max-width: 380px;">
       <div class="modal-header">
-        <h3>Innstillinger & Server</h3>
-        <button type="button" class="btn btn-icon btn-sm" id="btn-close-settings">✕</button>
+        <h3 id="admin-login-title">Admin-innlogging</h3>
+        <button type="button" class="btn btn-icon btn-sm" id="btn-close-admin-login">✕</button>
       </div>
       <div class="modal-body">
+        <p class="form-help" id="admin-login-desc">Skriv inn admin-passord for å låse opp administrator-tilgang.</p>
         <div class="form-group">
-          <label for="input-books-dir">Bokmappe på serveren (1 undermappe pr. bok)</label>
-          <div class="input-row">
-            <input type="text" id="input-books-dir" placeholder="C:\Bøker" />
-            <button type="button" class="btn btn-primary" id="btn-save-books-dir">Lagre mappe</button>
-          </div>
-          <p class="form-help">
-            Hver bokmappe kan inneholde Forsats (c1), Rygg (c2), Baksats (c3) og 0001.jpg oppover.
-          </p>
-          <p class="form-status hidden" id="books-dir-status"></p>
+          <label for="input-admin-password">Admin-passord</label>
+          <input type="password" id="input-admin-password" class="text-input" placeholder="Skriv inn admin-passord" autocomplete="current-password" />
         </div>
-
-        <div class="form-group">
-          <label>Legg til offisiell e-bok (.epub eller .pdf)</label>
-          <div class="input-row">
-            <label class="btn btn-primary" style="cursor:pointer; flex:1">
-              Last opp .epub / .pdf fil
-              <input type="file" id="input-upload-ebook" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple class="hidden" />
-            </label>
-          </div>
-          <p class="form-help">
-            Du kan enten laste opp her eller legge <code>.epub</code> og <code>.pdf</code> filer direkte i bokmappen.
-          </p>
-          <p class="form-status hidden" id="ebook-upload-status"></p>
-        </div>
-
-        <div class="form-group">
-          <label>Mobil / Lokalt nettverk (LAN)</label>
-          <div class="info-panel" id="lan-urls-list">
-            Laster nettverksadresser...
-          </div>
-          <p class="form-help">Åpne en av adressene over i nettleseren på mobilen eller del med venner på nettverket.</p>
+        <p class="password-error hidden" id="admin-login-error">Feil admin-passord</p>
+        <div class="modal-actions">
+          <div style="flex:1"></div>
+          <button type="button" class="btn" id="btn-cancel-admin-login">Avbryt</button>
+          <button type="button" class="btn btn-primary" id="btn-submit-admin-login">Lås opp</button>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="/vendor/pdf.min.js"></script>
-  <script src="/app.js?v=7"></script>
+  <!-- ======================== SETTINGS & ADMIN MODAL ======================== -->
+  <div class="modal-backdrop hidden" id="settings-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3>Innstillinger & Admin</h3>
+        <button type="button" class="btn btn-icon btn-sm" id="btn-close-settings">✕</button>
+      </div>
+
+      <!-- Non-admin view -->
+      <div class="modal-body hidden" id="settings-user-view">
+        <p class="form-help">
+          Serverinnstillinger, bokopplasting, endring av boknavn og brukerrettigheter krever admin-tilgang.
+        </p>
+        <div class="modal-actions" style="border-top:none; padding-top:0;">
+          <button type="button" class="btn btn-primary" id="btn-settings-admin-unlock">Logg inn som admin</button>
+          <div style="flex:1"></div>
+          <button type="button" class="btn" id="btn-settings-user-logout">Logg ut</button>
+        </div>
+      </div>
+
+      <!-- Admin view -->
+      <div class="modal-body hidden" id="settings-admin-view">
+        <div class="admin-tabs" role="tablist">
+          <button type="button" class="admin-tab active" data-admin-tab="books">Bøker</button>
+          <button type="button" class="admin-tab" data-admin-tab="users">Brukere & tilgang</button>
+          <button type="button" class="admin-tab" data-admin-tab="security">Sikkerhet & server</button>
+        </div>
+
+        <!-- TAB 1: BOOKS -->
+        <div class="admin-pane active" id="admin-pane-books">
+          <div class="form-group">
+            <label>Last opp e-bok (.epub eller .pdf)</label>
+            <div class="input-row">
+              <label class="btn btn-primary" style="cursor:pointer; flex:1">
+                Last opp .epub / .pdf fil
+                <input type="file" id="input-upload-ebook" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple class="hidden" />
+              </label>
+            </div>
+            <p class="form-status hidden" id="ebook-upload-status"></p>
+          </div>
+
+          <div class="form-group">
+            <label>Bøker i biblioteket (endre visningsnavn & synlighet)</label>
+            <div class="admin-list" id="admin-books-list"></div>
+          </div>
+        </div>
+
+        <!-- TAB 2: USERS & ACCESS -->
+        <div class="admin-pane" id="admin-pane-users">
+          <p class="form-help">
+            Administrer hvilke profiler som har admin-tilgang, personlig admin-passord og hvilke bøker som er skjult per profil.
+          </p>
+          <div class="admin-list" id="admin-users-list"></div>
+        </div>
+
+        <!-- TAB 3: SECURITY & SERVER -->
+        <div class="admin-pane" id="admin-pane-security">
+          <div class="form-group">
+            <label for="input-new-reader-password">Nytt leserpassord (for vanlige brukere)</label>
+            <input type="password" id="input-new-reader-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
+            <p class="form-help hidden" id="reader-pwd-env-note">Styres av miljøvariabelen BOKAMI_PASSWORD og kan ikke endres her.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="input-new-global-admin-password">Nytt globalt admin-passord</label>
+            <input type="password" id="input-new-global-admin-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
+            <p class="form-help hidden" id="admin-pwd-env-note">Styres av miljøvariabelen BOKAMI_ADMIN_PASSWORD og kan ikke endres her.</p>
+          </div>
+
+          <div class="input-row">
+            <button type="button" class="btn btn-primary" id="btn-save-admin-passwords">Lagre passord</button>
+          </div>
+          <p class="form-status hidden" id="admin-passwords-status"></p>
+
+          <div class="form-group">
+            <label>Mobil / Lokalt nettverk (LAN)</label>
+            <div class="info-panel" id="lan-urls-list">
+              Laster nettverksadresser...
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="btn" id="btn-admin-lock">Lås admin-modus</button>
+            <div style="flex:1"></div>
+            <button type="button" class="btn" id="btn-settings-admin-logout" style="color:#f85149;">Logg ut</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/vendor/pdf-loader.mjs?v=8"></script>
+  <script defer src="/app.js?v=8"></script>
 </body>
 </html>

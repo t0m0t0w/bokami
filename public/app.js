@@ -1,11 +1,21 @@
 (() => {
   'use strict';
 
-  const state = {
-    // Auth
-    authToken: localStorage.getItem('bokami_auth_token') || '',
+  const EPUB_ALLOWED_TAGS = [
+    'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'div', 'span', 'blockquote', 'pre', 'code', 'em', 'strong', 'i', 'b', 'u', 's',
+    'sub', 'sup', 'small', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+    'figure', 'figcaption', 'img', 'a', 'section', 'article', 'aside',
+    'header', 'footer', 'nav', 'ruby', 'rt', 'rp'
+  ];
+  const EPUB_ALLOWED_TAG_SET = new Set(EPUB_ALLOWED_TAGS);
+  const EPUB_ALLOWED_ATTRS = ['src', 'alt', 'href', 'data-epub-href', 'title', 'colspan', 'rowspan', 'rel', 'target'];
 
-    // Profiles (saved in localStorage so it remembers who you used last!)
+  const state = {
+    isAdmin: false,
+
+    // Profiles
     profiles: [],
     activeProfileId: localStorage.getItem('bokami_profile_id') || null,
     activeProfile: null,
@@ -13,30 +23,32 @@
     editingProfileId: null,
     draftProfileAvatar: '',
     draftProfileColor: '#00A3FF',
+    pendingAdminAction: null,
 
     // Library
     books: [],
     filteredBooks: [],
-    serverInfo: null,
+    adminOverview: null,
+    activeAdminTab: 'books',
     preferences: {
-      shelfView: 'grid',       // 'grid' | 'spine'
-      gridCoverMode: 'c1',     // 'c1' | 'c2' | 'c3'
-      readerMode: 'auto',      // 'auto' | 'single' | 'spread' | 'vertical'
+      shelfView: 'grid',
+      gridCoverMode: 'c1',
+      readerMode: 'auto',
       fitMode: 'height'
     },
-    filter: 'all',             // 'all' | 'reading' | 'bookmarked' | 'completed'
+    filter: 'all',
     searchQuery: '',
 
     // Rygg carousel state
     carouselIndex: 0,
-    carouselCoverMode: 'c1',   // 'c1' (Forsats) | 'c2' (Rygg) | 'c3' (Baksats) on active center item
+    carouselCoverMode: 'c1',
 
     // Reader state
-    activeBook: null,          // full book detail from /api/books/:id
+    activeBook: null,
     currentPageIndex: 0,
     effectiveReaderMode: 'spread',
     barsHidden: false,
-    drawerTab: 'chapters',     // 'chapters' | 'bookmarks'
+    drawerTab: 'chapters',
 
     // Zoom & Pan state
     zoomScale: 1,
@@ -54,13 +66,23 @@
   let activePdfDoc = null;
   const pdfPageRenderCache = new Map();
 
-  if (window.pdfjsLib) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
+  function waitForPdfJs(timeoutMs = 8000) {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('bokami:pdfjs-ready', finish);
+        resolve(window.pdfjsLib || null);
+      };
+      window.addEventListener('bokami:pdfjs-ready', finish, { once: true });
+      setTimeout(finish, timeoutMs);
+    });
   }
 
   // DOM Elements
   const el = {
-    // Ambient Backdrop
     ambientBackdrop: document.getElementById('ambient-backdrop'),
     ambientBackdropImg: document.getElementById('ambient-backdrop-img'),
 
@@ -74,6 +96,18 @@
     profileScreen: document.getElementById('profile-screen'),
     profilesGrid: document.getElementById('profiles-grid'),
     btnManageProfiles: document.getElementById('btn-manage-profiles'),
+    btnProfileAdminUnlock: document.getElementById('btn-profile-admin-unlock'),
+    btnLogoutProfileScreen: document.getElementById('btn-logout-profile-screen'),
+
+    // Admin Login Modal
+    adminLoginModal: document.getElementById('admin-login-modal'),
+    adminLoginTitle: document.getElementById('admin-login-title'),
+    adminLoginDesc: document.getElementById('admin-login-desc'),
+    inputAdminPassword: document.getElementById('input-admin-password'),
+    adminLoginError: document.getElementById('admin-login-error'),
+    btnCloseAdminLogin: document.getElementById('btn-close-admin-login'),
+    btnCancelAdminLogin: document.getElementById('btn-cancel-admin-login'),
+    btnSubmitAdminLogin: document.getElementById('btn-submit-admin-login'),
 
     // Profile Modal
     profileModal: document.getElementById('profile-modal'),
@@ -116,6 +150,7 @@
     carouselBookMeta: document.getElementById('carousel-book-meta'),
     carouselOpenBtn: document.getElementById('carousel-open-btn'),
     carouselBookmarksBtn: document.getElementById('carousel-bookmarks-btn'),
+    carouselSizeControl: document.getElementById('carousel-size-control'),
     btnScaleDown: document.getElementById('btn-scale-down'),
     btnScaleUp: document.getElementById('btn-scale-up'),
     carouselScaleLabel: document.getElementById('carousel-scale-label'),
@@ -132,6 +167,7 @@
     btnViewOptions: document.getElementById('btn-view-options'),
     viewOptionsPopover: document.getElementById('view-options-popover'),
     popoverSpreadSection: document.getElementById('popover-spread-section'),
+    popoverScaleSection: document.getElementById('popover-scale-section'),
     btnSpreadOffset: document.getElementById('btn-spread-offset'),
     btnReaderScaleDown: document.getElementById('btn-reader-scale-down'),
     btnReaderScaleUp: document.getElementById('btn-reader-scale-up'),
@@ -153,6 +189,7 @@
     tabBtnBookmarks: document.getElementById('tab-btn-bookmarks'),
     drawerPaneChapters: document.getElementById('drawer-pane-chapters'),
     drawerPaneBookmarks: document.getElementById('drawer-pane-bookmarks'),
+    chapterAddForm: document.getElementById('chapter-add-form'),
     chapterTitleInput: document.getElementById('chapter-title-input'),
     btnSaveChapter: document.getElementById('btn-save-chapter'),
     chaptersList: document.getElementById('chapters-list'),
@@ -179,77 +216,215 @@
     btnExportZip: document.getElementById('btn-export-zip'),
     btnExportPdf: document.getElementById('btn-export-pdf'),
 
-    // Settings Modal
+    // Settings / Admin Modal
     settingsModal: document.getElementById('settings-modal'),
     btnCloseSettings: document.getElementById('btn-close-settings'),
-    inputBooksDir: document.getElementById('input-books-dir'),
-    btnSaveBooksDir: document.getElementById('btn-save-books-dir'),
-    booksDirStatus: document.getElementById('books-dir-status'),
+    settingsUserView: document.getElementById('settings-user-view'),
+    settingsAdminView: document.getElementById('settings-admin-view'),
+    btnSettingsAdminUnlock: document.getElementById('btn-settings-admin-unlock'),
+    btnSettingsUserLogout: document.getElementById('btn-settings-user-logout'),
     inputUploadEbook: document.getElementById('input-upload-ebook'),
     ebookUploadStatus: document.getElementById('ebook-upload-status'),
-    lanUrlsList: document.getElementById('lan-urls-list')
+    adminBooksList: document.getElementById('admin-books-list'),
+    adminUsersList: document.getElementById('admin-users-list'),
+    inputNewReaderPassword: document.getElementById('input-new-reader-password'),
+    inputNewGlobalAdminPassword: document.getElementById('input-new-global-admin-password'),
+    readerPwdEnvNote: document.getElementById('reader-pwd-env-note'),
+    adminPwdEnvNote: document.getElementById('admin-pwd-env-note'),
+    btnSaveAdminPasswords: document.getElementById('btn-save-admin-passwords'),
+    adminPasswordsStatus: document.getElementById('admin-passwords-status'),
+    lanUrlsList: document.getElementById('lan-urls-list'),
+    btnAdminLock: document.getElementById('btn-admin-lock'),
+    btnSettingsAdminLogout: document.getElementById('btn-settings-admin-logout')
   };
+
+  // ======================== SECURITY & SANITIZATION HELPERS ========================
+  function isSafeAvatarUrl(val) {
+    if (typeof val !== 'string' || !val) return false;
+    return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(val);
+  }
+
+  function safeHexColor(val) {
+    return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val) ? val : '#00A3FF';
+  }
+
+  function isSafeExternalHref(val) {
+    if (typeof val !== 'string') return false;
+    const trimmed = val.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith('#')) return true;
+    try {
+      const u = new URL(trimmed);
+      return u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'mailto:';
+    } catch {
+      return false;
+    }
+  }
+
+  function cloneAllowedEpubNodes(srcNode, dstParent) {
+    for (const child of Array.from(srcNode.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        dstParent.appendChild(document.createTextNode(child.textContent || ''));
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+      const tag = child.tagName.toLowerCase();
+      if (!EPUB_ALLOWED_TAG_SET.has(tag)) {
+        continue;
+      }
+
+      const safeEl = document.createElement(tag);
+      if (tag === 'img') {
+        const rawSrc = child.getAttribute('src') || '';
+        if (rawSrc.startsWith('/epub-resource/')) {
+          safeEl.setAttribute('src', rawSrc);
+        }
+        const rawAlt = child.getAttribute('alt');
+        if (rawAlt) safeEl.setAttribute('alt', rawAlt.slice(0, 300));
+      } else if (tag === 'a') {
+        const rawHref = child.getAttribute('href') || '';
+        if (isSafeExternalHref(rawHref)) {
+          safeEl.setAttribute('href', rawHref.trim());
+          if (rawHref.trim().startsWith('http://') || rawHref.trim().startsWith('https://')) {
+            safeEl.setAttribute('rel', 'noopener noreferrer');
+            safeEl.setAttribute('target', '_blank');
+          }
+        }
+        const epubHref = child.getAttribute('data-epub-href');
+        if (epubHref && !epubHref.includes(':')) {
+          safeEl.setAttribute('data-epub-href', epubHref);
+        }
+        const title = child.getAttribute('title');
+        if (title) safeEl.setAttribute('title', title.slice(0, 200));
+      } else if (tag === 'td' || tag === 'th') {
+        for (const attrName of ['colspan', 'rowspan']) {
+          const val = parseInt(child.getAttribute(attrName) || '', 10);
+          if (Number.isInteger(val) && val >= 1 && val <= 100) {
+            safeEl.setAttribute(attrName, String(val));
+          }
+        }
+      }
+
+      cloneAllowedEpubNodes(child, safeEl);
+      dstParent.appendChild(safeEl);
+    }
+  }
+
+  function safeSetEpubHtml(container, html) {
+    const rawHtml = String(html || '');
+    if ('setHTML' in Element.prototype) {
+      container.setHTML(rawHtml, {
+        sanitizer: {
+          elements: EPUB_ALLOWED_TAGS,
+          attributes: EPUB_ALLOWED_ATTRS
+        }
+      });
+    } else {
+      const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+      const frag = document.createDocumentFragment();
+      cloneAllowedEpubNodes(doc.body, frag);
+      container.replaceChildren(frag);
+    }
+
+    container.querySelectorAll('img').forEach((imgEl) => {
+      const rawSrc = imgEl.getAttribute('src') || '';
+      if (!rawSrc.startsWith('/epub-resource/')) {
+        imgEl.remove();
+      }
+    });
+
+    container.querySelectorAll('a').forEach((aEl) => {
+      const rawHref = aEl.getAttribute('href');
+      if (rawHref !== null && !isSafeExternalHref(rawHref)) {
+        aEl.removeAttribute('href');
+      } else if (rawHref && (rawHref.startsWith('http://') || rawHref.startsWith('https://'))) {
+        aEl.setAttribute('rel', 'noopener noreferrer');
+        aEl.setAttribute('target', '_blank');
+      }
+    });
+  }
 
   // ======================== API HELPERS ========================
   function requestHeaders() {
-    const h = { 'Content-Type': 'application/json' };
+    const h = {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'fetch'
+    };
     if (state.activeProfileId) {
       h['X-Profile-Id'] = state.activeProfileId;
-    }
-    if (state.authToken) {
-      h['X-Auth-Token'] = state.authToken;
     }
     return h;
   }
 
-  function withTokenUrl(url) {
-    if (!url || !state.authToken) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(state.authToken)}`;
+  async function parseJsonSafe(res) {
+    try {
+      return await res.json();
+    } catch {
+      return {};
+    }
+  }
+
+  async function handleHttpError(res, json, url) {
+    if (res.status === 401 && url !== '/api/auth/login' && url !== '/api/auth/admin-unlock') {
+      showPasswordScreen();
+    } else if (res.status === 403 && json && json.requireAdmin) {
+      state.isAdmin = false;
+      syncAdminControlsVisibility();
+    }
+    throw new Error((json && json.error) || `HTTP ${res.status}`);
   }
 
   async function apiGet(url) {
-    const res = await fetch(url, { headers: requestHeaders() });
-    if (res.status === 401) {
-      showPasswordScreen();
-      throw new Error('Krever passord');
+    const res = await fetch(url, {
+      credentials: 'same-origin',
+      headers: requestHeaders()
+    });
+    const json = await parseJsonSafe(res);
+    if (!res.ok) {
+      await handleHttpError(res, json, url);
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    return json;
   }
 
   async function apiPost(url, data) {
     const res = await fetch(url, {
       method: 'POST',
+      credentials: 'same-origin',
       headers: requestHeaders(),
-      body: JSON.stringify(data)
+      body: JSON.stringify(data || {})
     });
-    const json = await res.json();
-    if (res.status === 401 && url !== '/api/auth/login') {
-      showPasswordScreen();
+    const json = await parseJsonSafe(res);
+    if (!res.ok) {
+      await handleHttpError(res, json, url);
     }
-    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
     return json;
   }
 
   async function apiPut(url, data) {
     const res = await fetch(url, {
       method: 'PUT',
+      credentials: 'same-origin',
       headers: requestHeaders(),
-      body: JSON.stringify(data)
+      body: JSON.stringify(data || {})
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    const json = await parseJsonSafe(res);
+    if (!res.ok) {
+      await handleHttpError(res, json, url);
+    }
     return json;
   }
 
   async function apiDelete(url) {
     const res = await fetch(url, {
       method: 'DELETE',
+      credentials: 'same-origin',
       headers: requestHeaders()
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    const json = await parseJsonSafe(res);
+    if (!res.ok) {
+      await handleHttpError(res, json, url);
+    }
     return json;
   }
 
@@ -276,28 +451,61 @@
     }
   }
 
+  function syncAdminControlsVisibility() {
+    if (el.btnProfileAdminUnlock) {
+      el.btnProfileAdminUnlock.textContent = state.isAdmin ? 'Lås admin' : 'Admin-innlogging';
+      el.btnProfileAdminUnlock.classList.toggle('active', state.isAdmin);
+    }
+    if (el.carouselSizeControl) {
+      el.carouselSizeControl.classList.toggle('hidden', !state.isAdmin);
+    }
+    if (el.popoverScaleSection) {
+      el.popoverScaleSection.classList.toggle('hidden', !state.isAdmin);
+    }
+    if (el.popoverSpreadSection) {
+      el.popoverSpreadSection.classList.toggle(
+        'hidden',
+        !state.isAdmin || state.effectiveReaderMode !== 'spread'
+      );
+    }
+    if (el.chapterAddForm) {
+      el.chapterAddForm.classList.toggle('hidden', !state.isAdmin);
+    }
+  }
+
   async function loadRandomBackdrop() {
     if (!el.ambientBackdropImg) return;
     try {
       const data = await apiGet('/api/random-backdrop');
       if (data && data.url) {
-        const fullUrl = withTokenUrl(data.url);
         el.ambientBackdropImg.onload = () => {
           el.ambientBackdropImg.classList.add('is-loaded');
         };
-        el.ambientBackdropImg.src = fullUrl;
+        el.ambientBackdropImg.src = data.url;
+      } else {
+        el.ambientBackdropImg.removeAttribute('src');
+        el.ambientBackdropImg.classList.remove('is-loaded');
       }
     } catch {
       // ignore
     }
   }
 
-  // ======================== 0A) PASSWORD GATE ========================
+  // ======================== 0A) PASSWORD GATE & ADMIN UNLOCK ========================
   async function checkAuthAndBoot() {
     try {
-      const res = await fetch('/api/auth/check', { headers: requestHeaders() });
+      const res = await fetch('/api/auth/check', {
+        credentials: 'same-origin',
+        headers: requestHeaders()
+      });
       const data = await res.json();
       if (data.authenticated) {
+        state.isAdmin = Boolean(data.isAdmin);
+        if (data.activeProfileId) {
+          state.activeProfileId = data.activeProfileId;
+          localStorage.setItem('bokami_profile_id', data.activeProfileId);
+        }
+        syncAdminControlsVisibility();
         loadProfiles(false);
       } else {
         showPasswordScreen();
@@ -308,6 +516,13 @@
   }
 
   function showPasswordScreen() {
+    state.isAdmin = false;
+    state.activeBook = null;
+    syncAdminControlsVisibility();
+    el.settingsModal.classList.add('hidden');
+    el.adminLoginModal.classList.add('hidden');
+    el.profileModal.classList.add('hidden');
+    el.exportModal.classList.add('hidden');
     showScreen('password');
     el.passwordError.classList.add('hidden');
     setTimeout(() => el.passwordInput.focus(), 50);
@@ -317,37 +532,138 @@
     const pwd = el.passwordInput.value;
     try {
       const res = await apiPost('/api/auth/login', { password: pwd });
-      if (res.ok && res.token) {
-        state.authToken = res.token;
-        localStorage.setItem('bokami_auth_token', res.token);
-        document.cookie = `bokami_token=${res.token}; path=/; max-age=31536000; SameSite=Lax`;
+      if (res.ok) {
+        state.isAdmin = Boolean(res.isAdmin);
         el.passwordInput.value = '';
         el.passwordError.classList.add('hidden');
+        syncAdminControlsVisibility();
+        if (res.matchedProfileId) {
+          state.activeProfileId = res.matchedProfileId;
+          localStorage.setItem('bokami_profile_id', res.matchedProfileId);
+        }
         loadProfiles(false);
       }
-    } catch {
+    } catch (err) {
+      el.passwordError.textContent = err.message || 'Feil passord';
       el.passwordError.classList.remove('hidden');
       el.passwordInput.select();
     }
   }
 
+  async function logoutSession() {
+    try {
+      await apiPost('/api/auth/logout', {});
+    } catch {
+      // ignore
+    }
+    state.isAdmin = false;
+    state.activeProfile = null;
+    state.activeBook = null;
+    state.books = [];
+    state.filteredBooks = [];
+    showPasswordScreen();
+  }
+
+  function openAdminLoginModal(pendingAction = null, title = 'Admin-innlogging', desc = 'Skriv inn admin-passord for å låse opp administrator-tilgang.') {
+    state.pendingAdminAction = pendingAction;
+    el.adminLoginTitle.textContent = title;
+    el.adminLoginDesc.textContent = desc;
+    el.inputAdminPassword.value = '';
+    el.adminLoginError.classList.add('hidden');
+    el.adminLoginModal.classList.remove('hidden');
+    setTimeout(() => el.inputAdminPassword.focus(), 40);
+  }
+
+  async function submitAdminLogin() {
+    const pwd = el.inputAdminPassword.value;
+    const action = state.pendingAdminAction;
+    const payload = { password: pwd };
+    if (action && action.profileId) {
+      payload.profileId = action.profileId;
+    }
+
+    try {
+      const res = await apiPost('/api/auth/admin-unlock', payload);
+      state.isAdmin = Boolean(res.isAdmin);
+      el.adminLoginModal.classList.add('hidden');
+      el.inputAdminPassword.value = '';
+      el.adminLoginError.classList.add('hidden');
+      state.pendingAdminAction = null;
+      syncAdminControlsVisibility();
+
+      if (action && action.type === 'select-profile' && action.profileId) {
+        await selectProfile(action.profileId);
+        return;
+      }
+      if (action && action.type === 'manage-profile' && action.profile) {
+        await loadProfiles(true);
+        openProfileModal(action.profile);
+        return;
+      }
+      if (action && action.type === 'open-settings') {
+        await loadProfiles(true, true);
+        if (el.shelfScreen.classList.contains('active')) {
+          await loadLibrary();
+        }
+        if (!el.settingsModal.classList.contains('hidden')) {
+          await openSettingsModal();
+        }
+        return;
+      }
+
+      await loadProfiles(true);
+    } catch (err) {
+      el.adminLoginError.textContent = err.message || 'Feil admin-passord';
+      el.adminLoginError.classList.remove('hidden');
+      el.inputAdminPassword.select();
+    }
+  }
+
+  async function lockAdminMode() {
+    try {
+      const res = await apiPost('/api/auth/admin-lock', {});
+      state.isAdmin = Boolean(res.isAdmin);
+      state.activeProfileId = res.activeProfileId || null;
+      if (state.activeProfileId) {
+        localStorage.setItem('bokami_profile_id', state.activeProfileId);
+      } else {
+        localStorage.removeItem('bokami_profile_id');
+      }
+      syncAdminControlsVisibility();
+      el.settingsModal.classList.add('hidden');
+      if (!state.activeProfileId) {
+        await loadProfiles(true);
+      } else if (el.shelfScreen.classList.contains('active')) {
+        await loadLibrary();
+      } else {
+        await loadProfiles(true);
+      }
+    } catch (err) {
+      console.error('Kunne ikke låse admin:', err);
+    }
+  }
+
   // ======================== 0B) PROFILES (NETFLIX-STYLE) ========================
-  async function loadProfiles(showSelector = false) {
+  async function loadProfiles(showSelector = false, suppressScreenSwitch = false) {
     try {
       loadRandomBackdrop();
       const data = await apiGet('/api/profiles');
       state.profiles = data.profiles || [];
+      state.isAdmin = Boolean(data.isAdmin);
+      syncAdminControlsVisibility();
 
       if (!showSelector && state.activeProfileId) {
         const found = state.profiles.find((p) => p.id === state.activeProfileId);
-        if (found) {
-          selectProfile(found.id);
+        if (found && (!found.isAdmin || state.isAdmin)) {
+          await selectProfile(found.id);
           return;
         }
       }
 
       renderProfileSelector();
-      showScreen('profile');
+      if (!suppressScreenSwitch) {
+        showScreen('profile');
+      }
     } catch (err) {
       console.error('Feil ved lasting av profiler:', err);
     }
@@ -357,28 +673,74 @@
     el.profilesGrid.classList.toggle('manage-mode', state.manageProfilesMode);
     el.btnManageProfiles.textContent = state.manageProfilesMode ? 'Ferdig' : 'Rediger profiler';
     el.btnManageProfiles.classList.toggle('active', state.manageProfilesMode);
-    el.profilesGrid.innerHTML = '';
+    el.profilesGrid.replaceChildren();
 
     state.profiles.forEach((prof) => {
       const card = document.createElement('div');
       card.className = 'profile-card';
 
-      const avatarInner = prof.avatar
-        ? `<img src="${prof.avatar}" alt="${escapeHtml(prof.name)}" />`
-        : `<span style="color:${escapeHtml(prof.color || '#00A3FF')}">${escapeHtml(getInitials(prof.name))}</span>`;
+      const tile = document.createElement('div');
+      tile.className = 'profile-avatar-tile';
 
-      card.innerHTML = `
-        <div class="profile-avatar-tile">
-          ${avatarInner}
-          <div class="profile-edit-overlay">Rediger</div>
-        </div>
-        <div class="profile-card-name">${escapeHtml(prof.name)}</div>
-        <div class="profile-card-meta">${prof.bookmarkTotal || 0} bokmerker</div>
-      `;
+      if (isSafeAvatarUrl(prof.avatar)) {
+        const img = document.createElement('img');
+        img.src = prof.avatar;
+        img.alt = prof.name;
+        tile.appendChild(img);
+      } else {
+        const initSpan = document.createElement('span');
+        initSpan.style.color = safeHexColor(prof.color);
+        initSpan.textContent = getInitials(prof.name);
+        tile.appendChild(initSpan);
+      }
+
+      if (prof.isAdmin) {
+        const adminBadge = document.createElement('span');
+        adminBadge.className = 'profile-admin-badge';
+        adminBadge.textContent = 'Admin';
+        tile.appendChild(adminBadge);
+
+        if (!state.isAdmin) {
+          const lockBadge = document.createElement('span');
+          lockBadge.className = 'profile-lock-badge';
+          lockBadge.textContent = '🔒';
+          lockBadge.title = 'Krever admin-passord';
+          tile.appendChild(lockBadge);
+        }
+      }
+
+      const editOverlay = document.createElement('div');
+      editOverlay.className = 'profile-edit-overlay';
+      editOverlay.textContent = 'Rediger';
+      tile.appendChild(editOverlay);
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'profile-card-name';
+      nameEl.textContent = prof.name;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'profile-card-meta';
+      metaEl.textContent = `${prof.bookmarkTotal || 0} bokmerker`;
+
+      card.append(tile, nameEl, metaEl);
 
       card.addEventListener('click', () => {
         if (state.manageProfilesMode) {
-          openProfileModal(prof);
+          if (prof.isAdmin && !state.isAdmin) {
+            openAdminLoginModal(
+              { type: 'manage-profile', profileId: prof.id, profile: prof },
+              `Lås opp ${prof.name}`,
+              'Denne profilen er administrator. Skriv inn admin-passord for å redigere den.'
+            );
+          } else {
+            openProfileModal(prof);
+          }
+        } else if (prof.isAdmin && !state.isAdmin) {
+          openAdminLoginModal(
+            { type: 'select-profile', profileId: prof.id },
+            `Admin: ${prof.name}`,
+            `Skriv inn admin-passord for å bruke admin-profilen ${prof.name}.`
+          );
         } else {
           selectProfile(prof.id);
         }
@@ -387,36 +749,58 @@
       el.profilesGrid.appendChild(card);
     });
 
-    // "+ Ny profil" card
+    // "+ Ny bruker" card
     const addCard = document.createElement('div');
     addCard.className = 'profile-card add-profile-card';
-    addCard.innerHTML = `
-      <div class="profile-avatar-tile">+</div>
-      <div class="profile-card-name">Ny bruker</div>
-      <div class="profile-card-meta">Lag profil</div>
-    `;
+
+    const addTile = document.createElement('div');
+    addTile.className = 'profile-avatar-tile';
+    addTile.textContent = '+';
+
+    const addName = document.createElement('div');
+    addName.className = 'profile-card-name';
+    addName.textContent = 'Ny bruker';
+
+    const addMeta = document.createElement('div');
+    addMeta.className = 'profile-card-meta';
+    addMeta.textContent = 'Lag profil';
+
+    addCard.append(addTile, addName, addMeta);
     addCard.addEventListener('click', () => openProfileModal(null));
     el.profilesGrid.appendChild(addCard);
   }
 
-  function selectProfile(profileId) {
-    state.activeProfileId = profileId;
-    localStorage.setItem('bokami_profile_id', profileId);
-    state.manageProfilesMode = false;
-    showScreen('shelf');
-    loadLibrary();
+  async function selectProfile(profileId) {
+    try {
+      await apiPost('/api/session/profile', { profileId });
+      state.activeProfileId = profileId;
+      localStorage.setItem('bokami_profile_id', profileId);
+      state.manageProfilesMode = false;
+      showScreen('shelf');
+      await loadLibrary();
+    } catch (err) {
+      openAdminLoginModal(
+        { type: 'select-profile', profileId },
+        'Admin-tilgang kreves',
+        err.message || 'Skriv inn admin-passord for å velge denne profilen.'
+      );
+    }
   }
 
   function updateTopbarProfileBadge(profile) {
     if (!profile) return;
     state.activeProfile = profile;
     el.currentProfileName.textContent = profile.name;
-    if (profile.avatar) {
-      el.currentProfileAvatar.innerHTML = `<img src="${profile.avatar}" alt="${escapeHtml(profile.name)}" />`;
+    el.currentProfileAvatar.replaceChildren();
+    if (isSafeAvatarUrl(profile.avatar)) {
+      const img = document.createElement('img');
+      img.src = profile.avatar;
+      img.alt = profile.name;
+      el.currentProfileAvatar.appendChild(img);
       el.currentProfileAvatar.style.background = 'transparent';
     } else {
       el.currentProfileAvatar.textContent = getInitials(profile.name);
-      el.currentProfileAvatar.style.background = profile.color || '#00A3FF';
+      el.currentProfileAvatar.style.background = safeHexColor(profile.color);
     }
     if (el.personalBookmarkSubnote) {
       el.personalBookmarkSubnote.textContent = `Kun synlig for ${profile.name}`;
@@ -425,14 +809,14 @@
 
   function openProfileModal(profile = null) {
     state.editingProfileId = profile ? profile.id : null;
-    state.draftProfileAvatar = profile ? profile.avatar || '' : '';
-    state.draftProfileColor = profile ? profile.color || '#00A3FF' : '#00A3FF';
+    state.draftProfileAvatar = profile && isSafeAvatarUrl(profile.avatar) ? profile.avatar : '';
+    state.draftProfileColor = profile ? safeHexColor(profile.color) : '#00A3FF';
 
     el.profileModalTitle.textContent = profile ? `Rediger ${profile.name}` : 'Ny profil';
     el.inputProfileName.value = profile ? profile.name : '';
     el.btnDeleteProfile.classList.toggle(
       'hidden',
-      !profile || state.profiles.length <= 1
+      !profile || state.profiles.length <= 1 || Boolean(profile && profile.isAdmin && state.profiles.filter((p) => p.isAdmin).length <= 1)
     );
 
     refreshProfileModalPreview();
@@ -442,16 +826,17 @@
 
   function refreshProfileModalPreview() {
     const name = el.inputProfileName.value.trim() || 'NY';
-    if (state.draftProfileAvatar) {
+    if (isSafeAvatarUrl(state.draftProfileAvatar)) {
       el.avatarPreviewImg.src = state.draftProfileAvatar;
       el.avatarPreviewImg.classList.remove('hidden');
       el.avatarPreviewInitials.classList.add('hidden');
       el.btnClearAvatar.classList.remove('hidden');
     } else {
+      el.avatarPreviewImg.removeAttribute('src');
       el.avatarPreviewImg.classList.add('hidden');
       el.avatarPreviewInitials.classList.remove('hidden');
       el.avatarPreviewInitials.textContent = getInitials(name);
-      el.avatarPreviewInitials.style.color = state.draftProfileColor;
+      el.avatarPreviewInitials.style.color = safeHexColor(state.draftProfileColor);
       el.btnClearAvatar.classList.add('hidden');
     }
 
@@ -509,7 +894,7 @@
         el.profileModal.classList.add('hidden');
         await loadProfiles(true);
         if (res.profile && !state.manageProfilesMode) {
-          selectProfile(res.profile.id);
+          await selectProfile(res.profile.id);
         }
       }
     } catch (err) {
@@ -538,7 +923,8 @@
       el.subbarStatus.textContent = 'Oppdaterer...';
       const data = await apiGet('/api/books');
       state.books = data.books || [];
-      state.serverInfo = data.serverInfo || null;
+      state.isAdmin = Boolean(data.isAdmin);
+      syncAdminControlsVisibility();
       if (data.profile) {
         updateTopbarProfileBadge(data.profile);
       }
@@ -547,7 +933,9 @@
       }
       applyFilterAndRender();
       syncTopbarControls();
-      ensurePdfCoversGenerated();
+      if (state.isAdmin) {
+        ensurePdfCoversGenerated();
+      }
     } catch (err) {
       el.subbarStatus.textContent = 'Kunne ikke laste bokhylle';
       console.error(err);
@@ -555,11 +943,16 @@
   }
 
   async function ensurePdfCoversGenerated() {
-    if (!window.pdfjsLib) return;
+    if (!state.isAdmin) return;
+    const pdfjs = await waitForPdfJs();
+    if (!pdfjs) return;
     for (const book of state.books) {
       if (book.format === 'pdf' && (!book.covers || !book.covers.hasC1) && book.ebookUrl) {
         try {
-          const pdfDoc = await window.pdfjsLib.getDocument(withTokenUrl(book.ebookUrl)).promise;
+          const pdfDoc = await pdfjs.getDocument({
+            url: book.ebookUrl,
+            isEvalSupported: false
+          }).promise;
           const page = await pdfDoc.getPage(1);
           const vp = page.getViewport({ scale: 1.5 });
           const canvas = document.createElement('canvas');
@@ -614,11 +1007,10 @@
     if (isEmpty) {
       el.gridViewContainer.classList.remove('active');
       el.spineViewContainer.classList.remove('active');
-      if (state.books.length === 0 && state.serverInfo) {
-        el.emptyStateDesc.innerHTML = `Fant ingen bøker i <code>${escapeHtml(state.serverInfo.booksDir)}</code>.`;
-      } else {
-        el.emptyStateDesc.textContent = 'Ingen bøker passer med valgt filter eller søk.';
-      }
+      el.emptyStateDesc.textContent =
+        state.books.length === 0
+          ? 'Ingen bøker er tilgjengelige for denne profilen.'
+          : 'Ingen bøker passer med valgt filter eller søk.';
       return;
     }
 
@@ -684,53 +1076,85 @@
       return { width: bookWidth, height: bookHeight };
     }
 
-    // Spine mode ('c2'): NEVER stretch c2! Use exact c2 aspect ratio when hasC2 is true
     if (book.covers && book.covers.hasC2 && c2.ratio) {
       const exactSpineWidth = Math.max(16, Math.round(bookHeight * c2.ratio));
       return { width: exactSpineWidth, height: bookHeight };
     }
 
-    // Fallback generated spine width (when book has no separate c2 image)
     const isMobile = window.innerWidth <= 768;
     const baseGeneratedW = isMobile ? 34 : 44;
     const spineWidth = Math.round(baseGeneratedW * scale);
     return { width: spineWidth, height: bookHeight };
   }
 
-  function buildCoverOrSpineInnerHtml(book, mode) {
+  function createCoverOrSpineNode(book, mode) {
     if (mode === 'c2' && (!book.covers || !book.covers.hasC2)) {
-      const bgImg = book.covers && book.covers.c1
-        ? `<img class="generated-spine-bg" src="${withTokenUrl(book.covers.c1)}" alt="" />`
-        : '';
-      return `
-        <div class="generated-spine">
-          ${bgImg}
-          <span class="generated-spine-title">${escapeHtml(book.title)}</span>
-        </div>
-      `;
+      const wrap = document.createElement('div');
+      wrap.className = 'generated-spine';
+      if (book.covers && book.covers.c1) {
+        const bgImg = document.createElement('img');
+        bgImg.className = 'generated-spine-bg';
+        bgImg.src = book.covers.c1;
+        bgImg.alt = '';
+        wrap.appendChild(bgImg);
+      }
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'generated-spine-title';
+      titleSpan.textContent = book.title;
+      wrap.appendChild(titleSpan);
+      return wrap;
     }
 
     const coverUrl = book.covers ? (book.covers[mode] || book.covers.c1) : null;
     if (!coverUrl) {
-      const fmtBadge = (book.format || 'bok').toUpperCase();
-      return `
-        <div class="generated-cover">
-          <span class="generated-cover-badge">${escapeHtml(fmtBadge)}</span>
-          <div class="generated-cover-title">${escapeHtml(book.title)}</div>
-        </div>
-      `;
+      const wrap = document.createElement('div');
+      wrap.className = 'generated-cover';
+
+      const badge = document.createElement('span');
+      badge.className = 'generated-cover-badge';
+      badge.textContent = String(book.format || 'bok').toUpperCase();
+
+      const titleDiv = document.createElement('div');
+      titleDiv.className = 'generated-cover-title';
+      titleDiv.textContent = book.title;
+
+      wrap.append(badge, titleDiv);
+      return wrap;
     }
 
-    return `<img src="${withTokenUrl(coverUrl)}" alt="${escapeHtml(book.title)}" loading="lazy" />`;
+    const img = document.createElement('img');
+    img.src = coverUrl;
+    img.alt = book.title;
+    img.loading = 'lazy';
+    return img;
+  }
+
+  function createCoverSwitcherNode(initialMode) {
+    const switcher = document.createElement('div');
+    switcher.className = 'card-cover-switcher';
+    switcher.title = 'Bytt forhåndsvisning';
+    const options = [
+      ['c1', 'Forsats'],
+      ['c2', 'Rygg'],
+      ['c3', 'Baksats']
+    ];
+    for (const [key, label] of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `mini-cover-btn${initialMode === key ? ' active' : ''}`;
+      btn.dataset.cardCover = key;
+      btn.textContent = label;
+      switcher.appendChild(btn);
+    }
+    return switcher;
   }
 
   async function adjustBookSizeScale(book, delta) {
-    if (!book) return;
+    if (!book || !state.isAdmin) return;
     const current = Number(book.sizeScale) || 1.0;
     const next = Math.max(0.5, Math.min(1.4, Math.round((current + delta) * 100) / 100));
     book.sizeScale = next;
 
-    // Also update matching item in state.books / state.filteredBooks
     const libBook = state.books.find((b) => b.id === book.id);
     if (libBook) libBook.sizeScale = next;
 
@@ -760,7 +1184,7 @@
   function renderGridView() {
     const coverMode = state.preferences.gridCoverMode || 'c1';
     el.booksGrid.classList.toggle('spine-mode-grid', coverMode === 'c2');
-    el.booksGrid.innerHTML = '';
+    el.booksGrid.replaceChildren();
 
     state.filteredBooks.forEach((book) => {
       const card = document.createElement('article');
@@ -772,45 +1196,63 @@
           : `Side ${book.progress.pageIndex + 1} av ${book.totalPages}`
         : `${book.totalPages} sider`;
 
-      const formatTag =
-        book.format === 'epub'
-          ? '<span class="card-badge">EPUB</span>'
-          : book.format === 'pdf'
-            ? '<span class="card-badge">PDF</span>'
-            : '';
+      const thumbEl = document.createElement('div');
+      thumbEl.className = 'book-card-thumb';
 
-      card.innerHTML = `
-        <div class="book-card-thumb">
-          <div class="thumb-media-slot" style="width:100%;height:100%">
-            ${buildCoverOrSpineInnerHtml(book, coverMode)}
-          </div>
-          <div class="card-badges">
-            ${formatTag}
-            ${book.bookmarkCount > 0 ? `<span class="card-badge" title="${book.bookmarkCount} bokmerker">★ ${book.bookmarkCount}</span>` : ''}
-          </div>
-          <div class="card-cover-switcher" title="Bytt forhåndsvisning">
-            <button type="button" class="mini-cover-btn ${coverMode === 'c1' ? 'active' : ''}" data-card-cover="c1">Forsats</button>
-            <button type="button" class="mini-cover-btn ${coverMode === 'c2' ? 'active' : ''}" data-card-cover="c2">Rygg</button>
-            <button type="button" class="mini-cover-btn ${coverMode === 'c3' ? 'active' : ''}" data-card-cover="c3">Baksats</button>
-          </div>
-        </div>
-        <div class="book-card-body">
-          <div class="book-card-title" title="${escapeHtml(book.title)}">${escapeHtml(book.title)}</div>
-          <div class="book-card-meta">${statusText}</div>
-        </div>
-      `;
+      const mediaSlot = document.createElement('div');
+      mediaSlot.className = 'thumb-media-slot';
+      mediaSlot.style.width = '100%';
+      mediaSlot.style.height = '100%';
+      mediaSlot.appendChild(createCoverOrSpineNode(book, coverMode));
 
-      const thumbEl = card.querySelector('.book-card-thumb');
-      const mediaSlot = card.querySelector('.thumb-media-slot');
+      const badges = document.createElement('div');
+      badges.className = 'card-badges';
+      if (book.adminOnly) {
+        const admBadge = document.createElement('span');
+        admBadge.className = 'card-badge';
+        admBadge.textContent = 'ADMIN';
+        badges.appendChild(admBadge);
+      }
+      if (book.format === 'epub' || book.format === 'pdf') {
+        const fmtBadge = document.createElement('span');
+        fmtBadge.className = 'card-badge';
+        fmtBadge.textContent = book.format.toUpperCase();
+        badges.appendChild(fmtBadge);
+      }
+      if (book.bookmarkCount > 0) {
+        const bmBadge = document.createElement('span');
+        bmBadge.className = 'card-badge';
+        bmBadge.title = `${book.bookmarkCount} bokmerker`;
+        bmBadge.textContent = `★ ${book.bookmarkCount}`;
+        badges.appendChild(bmBadge);
+      }
+
+      const switcher = createCoverSwitcherNode(coverMode);
+      thumbEl.append(mediaSlot, badges, switcher);
       applyGridThumbProportions(thumbEl, book, coverMode);
 
-      card.querySelectorAll('.mini-cover-btn').forEach((btn) => {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'book-card-body';
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'book-card-title';
+      titleEl.title = book.title;
+      titleEl.textContent = book.title;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'book-card-meta';
+      metaEl.textContent = statusText;
+
+      bodyEl.append(titleEl, metaEl);
+      card.append(thumbEl, bodyEl);
+
+      switcher.querySelectorAll('.mini-cover-btn').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const type = btn.dataset.cardCover;
-          mediaSlot.innerHTML = buildCoverOrSpineInnerHtml(book, type);
+          mediaSlot.replaceChildren(createCoverOrSpineNode(book, type));
           applyGridThumbProportions(thumbEl, book, type);
-          card.querySelectorAll('.mini-cover-btn').forEach((b) => b.classList.remove('active'));
+          switcher.querySelectorAll('.mini-cover-btn').forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
         });
       });
@@ -825,7 +1267,7 @@
 
   // ======================== 2) RYGG CAROUSEL RENDERER ========================
   function renderSpineCarousel() {
-    el.spineTrack.innerHTML = '';
+    el.spineTrack.replaceChildren();
     if (state.filteredBooks.length === 0) return;
 
     state.filteredBooks.forEach((book, idx) => {
@@ -842,29 +1284,26 @@
       item.style.height = `${size.height}px`;
       item.dataset.targetWidth = String(size.width);
 
-      item.innerHTML = `
-        <div class="spine-media-slot" style="width:100%;height:100%">
-          ${buildCoverOrSpineInnerHtml(book, activeMode)}
-        </div>
-        <div class="card-cover-switcher" title="Bytt forhåndsvisning">
-          <button type="button" class="mini-cover-btn ${centerMode === 'c1' ? 'active' : ''}" data-card-cover="c1">Forsats</button>
-          <button type="button" class="mini-cover-btn ${centerMode === 'c2' ? 'active' : ''}" data-card-cover="c2">Rygg</button>
-          <button type="button" class="mini-cover-btn ${centerMode === 'c3' ? 'active' : ''}" data-card-cover="c3">Baksats</button>
-        </div>
-      `;
+      const mediaSlot = document.createElement('div');
+      mediaSlot.className = 'spine-media-slot';
+      mediaSlot.style.width = '100%';
+      mediaSlot.style.height = '100%';
+      mediaSlot.appendChild(createCoverOrSpineNode(book, activeMode));
 
-      const mediaSlot = item.querySelector('.spine-media-slot');
-      item.querySelectorAll('.mini-cover-btn').forEach((btn) => {
+      const switcher = createCoverSwitcherNode(centerMode);
+      item.append(mediaSlot, switcher);
+
+      switcher.querySelectorAll('.mini-cover-btn').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const type = btn.dataset.cardCover;
           state.carouselCoverMode = type;
-          mediaSlot.innerHTML = buildCoverOrSpineInnerHtml(book, type);
+          mediaSlot.replaceChildren(createCoverOrSpineNode(book, type));
           const nextSize = computeCarouselItemSize(book, type, true);
           item.style.width = `${nextSize.width}px`;
           item.style.height = `${nextSize.height}px`;
           item.dataset.targetWidth = String(nextSize.width);
-          item.querySelectorAll('.mini-cover-btn').forEach((b) => b.classList.remove('active'));
+          switcher.querySelectorAll('.mini-cover-btn').forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
           centerActiveSpineItem();
         });
@@ -905,7 +1344,7 @@
       item.dataset.targetWidth = String(size.width);
 
       if (mediaSlot) {
-        mediaSlot.innerHTML = buildCoverOrSpineInnerHtml(book, activeMode);
+        mediaSlot.replaceChildren(createCoverOrSpineNode(book, activeMode));
       }
 
       if (isCenter) {
@@ -994,22 +1433,30 @@
     try {
       const detail = await apiGet(`/api/books/${encodeURIComponent(bookId)}`);
       state.activeBook = detail;
+      state.isAdmin = Boolean(detail.isAdmin);
+      syncAdminControlsVisibility();
       activePdfDoc = null;
       pdfPageRenderCache.clear();
 
-      if (detail.format === 'pdf' && window.pdfjsLib && detail.ebookUrl) {
-        activePdfDoc = await window.pdfjsLib.getDocument(withTokenUrl(detail.ebookUrl)).promise;
-        if (activePdfDoc.numPages && activePdfDoc.numPages !== detail.totalPages) {
-          detail.totalPages = activePdfDoc.numPages;
-          detail.pages = Array.from({ length: activePdfDoc.numPages }, (_, idx) => ({
-            index: idx,
-            filename: `page-${idx + 1}.pdf`,
-            label: idx === 0 ? 'Forsats / Side 1' : `Side ${idx + 1}`,
-            shortLabel: `Side ${idx + 1}`,
-            type: idx === 0 ? 'c1' : 'page',
-            pageNumber: idx + 1,
-            pdfPageNumber: idx + 1
-          }));
+      if (detail.format === 'pdf' && detail.ebookUrl) {
+        const pdfjs = await waitForPdfJs();
+        if (pdfjs) {
+          activePdfDoc = await pdfjs.getDocument({
+            url: detail.ebookUrl,
+            isEvalSupported: false
+          }).promise;
+          if (activePdfDoc.numPages && activePdfDoc.numPages !== detail.totalPages) {
+            detail.totalPages = activePdfDoc.numPages;
+            detail.pages = Array.from({ length: activePdfDoc.numPages }, (_, idx) => ({
+              index: idx,
+              filename: `page-${idx + 1}.pdf`,
+              label: idx === 0 ? 'Forsats / Side 1' : `Side ${idx + 1}`,
+              shortLabel: `Side ${idx + 1}`,
+              type: idx === 0 ? 'c1' : 'page',
+              pageNumber: idx + 1,
+              pdfPageNumber: idx + 1
+            }));
+          }
         }
       }
 
@@ -1103,7 +1550,13 @@
 
     const book = state.activeBook;
     const forsatsAlene = book ? Boolean(book.forsatsAlene) : true;
-    el.popoverSpreadSection.classList.toggle('hidden', state.effectiveReaderMode !== 'spread');
+    el.popoverSpreadSection.classList.toggle(
+      'hidden',
+      !state.isAdmin || state.effectiveReaderMode !== 'spread'
+    );
+    if (el.popoverScaleSection) {
+      el.popoverScaleSection.classList.toggle('hidden', !state.isAdmin);
+    }
     el.btnSpreadOffset.textContent = forsatsAlene ? 'På' : 'Av';
     el.btnSpreadOffset.classList.toggle('active', forsatsAlene);
 
@@ -1160,7 +1613,7 @@
     state.currentPageIndex = indices[0];
 
     el.spreadContainer.className = `spread-container ${indices.length > 1 ? 'is-spread' : 'single-mode'}`;
-    el.spreadContainer.innerHTML = '';
+    el.spreadContainer.replaceChildren();
 
     indices.forEach((i) => {
       const page = book.pages[i];
@@ -1169,13 +1622,7 @@
       if (book.format === 'epub') {
         const card = document.createElement('div');
         card.className = 'epub-page-card';
-        card.innerHTML = page.html || '';
-        card.querySelectorAll('img').forEach((imgEl) => {
-          const rawSrc = imgEl.getAttribute('src');
-          if (rawSrc && rawSrc.startsWith('/epub-resource/')) {
-            imgEl.src = withTokenUrl(rawSrc);
-          }
-        });
+        safeSetEpubHtml(card, page.html || '');
         el.spreadContainer.appendChild(card);
         return;
       }
@@ -1191,7 +1638,7 @@
           if (url) img.src = url;
         });
       } else {
-        img.src = withTokenUrl(page.url);
+        img.src = page.url;
       }
 
       el.spreadContainer.appendChild(img);
@@ -1217,7 +1664,7 @@
       verticalObserver.disconnect();
     }
 
-    el.readerVertical.innerHTML = '';
+    el.readerVertical.replaceChildren();
 
     book.pages.forEach((page) => {
       const wrapper = document.createElement('div');
@@ -1225,29 +1672,31 @@
       wrapper.dataset.pageIndex = String(page.index);
 
       if (book.format === 'epub') {
-        wrapper.innerHTML = `
-          <div class="epub-page-card" style="width:min(740px,94vw);height:auto;max-height:none;">
-            ${page.html || ''}
-          </div>
-          <div class="vertical-page-caption">${escapeHtml(page.shortLabel || page.label)}</div>
-        `;
-        wrapper.querySelectorAll('img').forEach((imgEl) => {
-          const rawSrc = imgEl.getAttribute('src');
-          if (rawSrc && rawSrc.startsWith('/epub-resource/')) {
-            imgEl.src = withTokenUrl(rawSrc);
-          }
-        });
+        const card = document.createElement('div');
+        card.className = 'epub-page-card';
+        card.style.width = 'min(740px, 94vw)';
+        card.style.height = 'auto';
+        card.style.maxHeight = 'none';
+        safeSetEpubHtml(card, page.html || '');
+        wrapper.appendChild(card);
       } else if (book.format === 'pdf') {
-        wrapper.innerHTML = `
-          <img class="pdf-lazy-img" data-pdf-page="${page.pdfPageNumber || page.index + 1}" alt="${escapeHtml(page.label)}" />
-          <div class="vertical-page-caption">${escapeHtml(page.shortLabel || page.label)}</div>
-        `;
+        const img = document.createElement('img');
+        img.className = 'pdf-lazy-img';
+        img.dataset.pdfPage = String(page.pdfPageNumber || page.index + 1);
+        img.alt = page.label;
+        wrapper.appendChild(img);
       } else {
-        wrapper.innerHTML = `
-          <img src="${withTokenUrl(page.url)}" alt="${escapeHtml(page.label)}" loading="lazy" />
-          <div class="vertical-page-caption">${escapeHtml(page.shortLabel || page.label)}</div>
-        `;
+        const img = document.createElement('img');
+        img.src = page.url;
+        img.alt = page.label;
+        img.loading = 'lazy';
+        wrapper.appendChild(img);
       }
+
+      const caption = document.createElement('div');
+      caption.className = 'vertical-page-caption';
+      caption.textContent = page.shortLabel || page.label;
+      wrapper.appendChild(caption);
 
       wrapper.addEventListener('click', () => {
         toggleBarsHidden();
@@ -1395,9 +1844,7 @@
     const fromVal = Math.max(1, Math.min(book.totalPages, parseInt(el.exportFromInput.value, 10) || 1));
     const toVal = Math.max(fromVal, Math.min(book.totalPages, parseInt(el.exportToInput.value, 10) || fromVal));
 
-    const url = withTokenUrl(
-      `/api/export/${encodeURIComponent(book.id)}?from=${fromVal}&to=${toVal}&format=${format}`
-    );
+    const url = `/api/export/${encodeURIComponent(book.id)}?from=${fromVal}&to=${toVal}&format=${encodeURIComponent(format)}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = '';
@@ -1476,7 +1923,7 @@
 
     candidates.forEach((idx) => {
       if (idx >= 0 && idx < book.pages.length) {
-        const url = withTokenUrl(book.pages[idx].url);
+        const url = book.pages[idx].url;
         if (url && !preloadedUrls.has(url)) {
           const img = new Image();
           img.src = url;
@@ -1545,10 +1992,10 @@
     }, 250);
   }
 
-  // ======================== SHARED CHAPTERS & FORSATS ALENE (book.json) ========================
+  // ======================== SHARED CHAPTERS & FORSATS ALENE (ADMIN-ONLY) ========================
   async function toggleBookForsatsAlene() {
     const book = state.activeBook;
-    if (!book) return;
+    if (!book || !state.isAdmin) return;
     const nextVal = !book.forsatsAlene;
     try {
       const res = await apiPost(`/api/books/${encodeURIComponent(book.id)}/meta`, {
@@ -1564,7 +2011,7 @@
 
   async function saveChapterOnCurrentPage() {
     const book = state.activeBook;
-    if (!book) return;
+    if (!book || !state.isAdmin) return;
     const pageIndex = state.currentPageIndex;
     const title =
       el.chapterTitleInput.value.trim() || `Kapittel ${(book.chapters || []).length + 1}`;
@@ -1586,7 +2033,7 @@
 
   async function deleteChapter(chapterId) {
     const book = state.activeBook;
-    if (!book) return;
+    if (!book || !state.isAdmin) return;
     try {
       const res = await apiDelete(
         `/api/books/${encodeURIComponent(book.id)}/chapters/${encodeURIComponent(chapterId)}`
@@ -1605,10 +2052,15 @@
     if (!book) return;
 
     const chs = book.chapters || [];
-    el.chaptersList.innerHTML = '';
+    el.chaptersList.replaceChildren();
 
     if (chs.length === 0) {
-      el.chaptersList.innerHTML = `<div style="padding:14px; color:var(--text-secondary); font-size:12px; text-align:center;">Ingen kapitler lagt til ennå.<br/>Skriv inn kapittelnavn over for å legge til på nåværende side.</div>`;
+      const emptyMsg = document.createElement('div');
+      emptyMsg.style.cssText = 'padding:14px; color:var(--text-secondary); font-size:12px; text-align:center;';
+      emptyMsg.textContent = state.isAdmin
+        ? 'Ingen kapitler lagt til ennå. Skriv inn kapittelnavn over for å legge til på nåværende side.'
+        : 'Ingen kapitler er lagt til i denne boka ennå.';
+      el.chaptersList.appendChild(emptyMsg);
       return;
     }
 
@@ -1618,21 +2070,35 @@
       item.dataset.chapterId = ch.id;
       item.dataset.pageIndex = String(ch.pageIndex);
 
-      item.innerHTML = `
-        <div class="bookmark-info">
-          <span class="bookmark-page">${escapeHtml(ch.title)}</span>
-          <span class="bookmark-note">${escapeHtml(ch.pageLabel || `Side ${ch.pageIndex + 1}`)}</span>
-        </div>
-        <button type="button" class="btn btn-icon btn-sm ch-del-btn" title="Slett kapittel">✕</button>
-      `;
+      const info = document.createElement('div');
+      info.className = 'bookmark-info';
+
+      const pageSpan = document.createElement('span');
+      pageSpan.className = 'bookmark-page';
+      pageSpan.textContent = ch.title;
+
+      const noteSpan = document.createElement('span');
+      noteSpan.className = 'bookmark-note';
+      noteSpan.textContent = ch.pageLabel || `Side ${ch.pageIndex + 1}`;
+
+      info.append(pageSpan, noteSpan);
+      item.appendChild(info);
+
+      if (state.isAdmin) {
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn btn-icon btn-sm ch-del-btn';
+        delBtn.title = 'Slett kapittel';
+        delBtn.textContent = '✕';
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteChapter(ch.id);
+        });
+        item.appendChild(delBtn);
+      }
 
       item.addEventListener('click', () => {
         goToPage(ch.pageIndex);
-      });
-
-      item.querySelector('.ch-del-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteChapter(ch.id);
       });
 
       el.chaptersList.appendChild(item);
@@ -1710,10 +2176,13 @@
     if (!book) return;
 
     const bms = book.bookmarks || [];
-    el.bookmarksList.innerHTML = '';
+    el.bookmarksList.replaceChildren();
 
     if (bms.length === 0) {
-      el.bookmarksList.innerHTML = `<div style="padding:14px; color:var(--text-secondary); font-size:12px; text-align:center;">Ingen bokmerker i denne boka ennå.</div>`;
+      const emptyMsg = document.createElement('div');
+      emptyMsg.style.cssText = 'padding:14px; color:var(--text-secondary); font-size:12px; text-align:center;';
+      emptyMsg.textContent = 'Ingen bokmerker i denne boka ennå.';
+      el.bookmarksList.appendChild(emptyMsg);
       return;
     }
 
@@ -1722,21 +2191,35 @@
       item.className = 'bookmark-item';
       item.dataset.pageIndex = String(bm.pageIndex);
 
-      item.innerHTML = `
-        <div class="bookmark-info">
-          <span class="bookmark-page" style="color:var(--accent)">★ ${escapeHtml(bm.pageLabel || `Side ${bm.pageIndex + 1}`)}</span>
-          ${bm.note ? `<span class="bookmark-note">${escapeHtml(bm.note)}</span>` : ''}
-        </div>
-        <button type="button" class="btn btn-icon btn-sm bm-del-btn" title="Slett bokmerke">✕</button>
-      `;
+      const info = document.createElement('div');
+      info.className = 'bookmark-info';
 
-      item.addEventListener('click', () => {
-        goToPage(bm.pageIndex);
-      });
+      const pageSpan = document.createElement('span');
+      pageSpan.className = 'bookmark-page';
+      pageSpan.style.color = 'var(--accent)';
+      pageSpan.textContent = `★ ${bm.pageLabel || `Side ${bm.pageIndex + 1}`}`;
+      info.appendChild(pageSpan);
 
-      item.querySelector('.bm-del-btn').addEventListener('click', (e) => {
+      if (bm.note) {
+        const noteSpan = document.createElement('span');
+        noteSpan.className = 'bookmark-note';
+        noteSpan.textContent = bm.note;
+        info.appendChild(noteSpan);
+      }
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-icon btn-sm bm-del-btn';
+      delBtn.title = 'Slett bokmerke';
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         deleteBookmark(bm.id);
+      });
+
+      item.append(info, delBtn);
+      item.addEventListener('click', () => {
+        goToPage(bm.pageIndex);
       });
 
       el.bookmarksList.appendChild(item);
@@ -1745,7 +2228,7 @@
 
   function renderScrubberTicks() {
     const book = state.activeBook;
-    el.scrubberBookmarks.innerHTML = '';
+    el.scrubberBookmarks.replaceChildren();
     if (!book || book.totalPages <= 1) return;
 
     (book.chapters || []).forEach((ch) => {
@@ -1767,48 +2250,326 @@
     });
   }
 
-  // ======================== SETTINGS MODAL ========================
-  function openSettingsModal() {
-    if (state.serverInfo) {
-      el.inputBooksDir.value = state.serverInfo.booksDir || '';
-      const port = state.serverInfo.port || 3000;
-      const ips = state.serverInfo.lanIps || [];
-      if (ips.length > 0) {
-        el.lanUrlsList.innerHTML = ips
-          .map((ip) => `<div>http://${escapeHtml(ip)}:${port}</div>`)
-          .join('');
-      } else {
-        el.lanUrlsList.innerHTML = `<div>http://localhost:${port}</div>`;
-      }
-    }
-    el.booksDirStatus.classList.add('hidden');
+  // ======================== SETTINGS & ADMIN PANEL ========================
+  function switchAdminTab(tabName) {
+    state.activeAdminTab = tabName;
+    document.querySelectorAll('[data-admin-tab]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.adminTab === tabName);
+    });
+    document.getElementById('admin-pane-books').classList.toggle('active', tabName === 'books');
+    document.getElementById('admin-pane-users').classList.toggle('active', tabName === 'users');
+    document.getElementById('admin-pane-security').classList.toggle('active', tabName === 'security');
+  }
+
+  async function openSettingsModal() {
     el.settingsModal.classList.remove('hidden');
+    if (!state.isAdmin) {
+      el.settingsUserView.classList.remove('hidden');
+      el.settingsAdminView.classList.add('hidden');
+      return;
+    }
+
+    el.settingsUserView.classList.add('hidden');
+    el.settingsAdminView.classList.remove('hidden');
+    switchAdminTab(state.activeAdminTab || 'books');
+    await refreshAdminOverview();
   }
 
-  async function saveBooksDirectory() {
-    const newDir = el.inputBooksDir.value.trim();
-    if (!newDir) return;
+  async function refreshAdminOverview() {
     try {
-      const res = await apiPost('/api/config', { booksDir: newDir });
-      el.booksDirStatus.textContent = `Lagret: ${res.config.booksDir}`;
-      el.booksDirStatus.classList.remove('hidden');
-      await loadLibrary();
+      const overview = await apiGet('/api/admin/overview');
+      state.adminOverview = overview;
+      renderAdminBooksList(overview.books || []);
+      renderAdminUsersList(overview.profiles || [], overview.books || []);
+      renderAdminSecurityPane(overview);
     } catch (err) {
-      el.booksDirStatus.textContent = `Feil: ${err.message}`;
-      el.booksDirStatus.classList.remove('hidden');
+      console.error('Kunne ikke laste admin-oversikt:', err);
     }
   }
 
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+  function renderAdminBooksList(books) {
+    el.adminBooksList.replaceChildren();
+    if (books.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'form-help';
+      empty.textContent = 'Ingen bøker funnet i biblioteket.';
+      el.adminBooksList.appendChild(empty);
+      return;
+    }
+
+    books.forEach((book) => {
+      const row = document.createElement('div');
+      row.className = 'admin-book-row';
+
+      const top = document.createElement('div');
+      top.className = 'admin-book-top';
+
+      const meta = document.createElement('div');
+      meta.className = 'admin-book-meta';
+      meta.textContent = `Mappe/fil: ${book.id} · ${String(book.format || 'images').toUpperCase()} · ${book.totalPages} sider`;
+
+      const adminOnlyLabel = document.createElement('label');
+      adminOnlyLabel.className = 'admin-checkbox-label';
+      const adminOnlyCb = document.createElement('input');
+      adminOnlyCb.type = 'checkbox';
+      adminOnlyCb.checked = Boolean(book.adminOnly);
+      const adminOnlyTxt = document.createElement('span');
+      adminOnlyTxt.textContent = 'Kun admin';
+      adminOnlyLabel.append(adminOnlyCb, adminOnlyTxt);
+
+      top.append(meta, adminOnlyLabel);
+
+      const inputRow = document.createElement('div');
+      inputRow.className = 'input-row';
+
+      const titleInput = document.createElement('input');
+      titleInput.type = 'text';
+      titleInput.maxLength = 140;
+      titleInput.value = book.customTitle || book.title;
+      titleInput.placeholder = book.originalTitle || book.id;
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'btn btn-primary btn-sm';
+      saveBtn.textContent = 'Lagre navn';
+
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn btn-sm';
+      resetBtn.textContent = 'Tilbakestill';
+      resetBtn.disabled = !book.customTitle;
+
+      const statusEl = document.createElement('span');
+      statusEl.className = 'admin-inline-note hidden';
+
+      inputRow.append(titleInput, saveBtn, resetBtn);
+      row.append(top, inputRow, statusEl);
+
+      const saveBookMetaChange = async (payload, okMsg) => {
+        try {
+          const updated = await apiPost(`/api/books/${encodeURIComponent(book.id)}/meta`, payload);
+          statusEl.textContent = okMsg;
+          statusEl.style.color = 'var(--accent)';
+          statusEl.classList.remove('hidden');
+          resetBtn.disabled = !updated.customTitle;
+          await Promise.all([refreshAdminOverview(), loadLibrary()]);
+        } catch (err) {
+          statusEl.textContent = `Feil: ${err.message}`;
+          statusEl.style.color = '#f85149';
+          statusEl.classList.remove('hidden');
+        }
+      };
+
+      saveBtn.addEventListener('click', () => {
+        saveBookMetaChange({ title: titleInput.value.trim() }, 'Visningsnavn lagret');
+      });
+
+      resetBtn.addEventListener('click', () => {
+        saveBookMetaChange({ title: '' }, 'Tilbakestilt til originalt navn');
+      });
+
+      adminOnlyCb.addEventListener('change', () => {
+        saveBookMetaChange(
+          { adminOnly: adminOnlyCb.checked },
+          adminOnlyCb.checked ? 'Kun synlig for admin' : 'Synlig for vanlige brukere'
+        );
+      });
+
+      el.adminBooksList.appendChild(row);
+    });
+  }
+
+  function renderAdminUsersList(profiles, books) {
+    el.adminUsersList.replaceChildren();
+    const adminCount = profiles.filter((p) => p.isAdmin).length;
+
+    profiles.forEach((prof) => {
+      const card = document.createElement('div');
+      card.className = 'admin-user-card';
+
+      const top = document.createElement('div');
+      top.className = 'admin-user-top';
+
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'admin-user-title';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = prof.name;
+      titleWrap.appendChild(nameSpan);
+
+      const adminLabel = document.createElement('label');
+      adminLabel.className = 'admin-checkbox-label';
+      const adminCb = document.createElement('input');
+      adminCb.type = 'checkbox';
+      adminCb.checked = Boolean(prof.isAdmin);
+      adminCb.disabled = Boolean(prof.isAdmin && adminCount <= 1);
+      const adminTxt = document.createElement('span');
+      adminTxt.textContent = 'Admin';
+      adminLabel.append(adminCb, adminTxt);
+
+      top.append(titleWrap, adminLabel);
+      card.appendChild(top);
+
+      const statusEl = document.createElement('span');
+      statusEl.className = 'admin-inline-note hidden';
+
+      const updateProfileAccess = async (payload, okMsg) => {
+        try {
+          await apiPut(`/api/admin/profiles/${encodeURIComponent(prof.id)}/access`, payload);
+          statusEl.textContent = okMsg;
+          statusEl.style.color = 'var(--accent)';
+          statusEl.classList.remove('hidden');
+          await refreshAdminOverview();
+          await loadProfiles(true, true);
+          if (state.activeProfileId === prof.id && el.shelfScreen.classList.contains('active')) {
+            await loadLibrary();
+          }
+        } catch (err) {
+          statusEl.textContent = `Feil: ${err.message}`;
+          statusEl.style.color = '#f85149';
+          statusEl.classList.remove('hidden');
+          adminCb.checked = Boolean(prof.isAdmin);
+        }
+      };
+
+      adminCb.addEventListener('change', () => {
+        updateProfileAccess(
+          { isAdmin: adminCb.checked },
+          adminCb.checked ? 'Admin-tilgang aktivert' : 'Admin-tilgang fjernet'
+        );
+      });
+
+      if (prof.isAdmin) {
+        const pwdRow = document.createElement('div');
+        pwdRow.className = 'input-row';
+        const pwdInput = document.createElement('input');
+        pwdInput.type = 'password';
+        pwdInput.placeholder = prof.hasPersonalAdminPassword
+          ? 'Endre personlig admin-passord...'
+          : 'Sett personlig admin-passord (valgfritt)...';
+        pwdInput.autocomplete = 'new-password';
+
+        const setPwdBtn = document.createElement('button');
+        setPwdBtn.type = 'button';
+        setPwdBtn.className = 'btn btn-sm';
+        setPwdBtn.textContent = 'Sett';
+        setPwdBtn.addEventListener('click', () => {
+          const val = pwdInput.value;
+          if (!val) return;
+          updateProfileAccess({ adminPassword: val }, 'Personlig admin-passord oppdatert');
+          pwdInput.value = '';
+        });
+
+        pwdRow.append(pwdInput, setPwdBtn);
+
+        if (prof.hasPersonalAdminPassword) {
+          const clearPwdBtn = document.createElement('button');
+          clearPwdBtn.type = 'button';
+          clearPwdBtn.className = 'btn btn-sm';
+          clearPwdBtn.textContent = 'Fjern';
+          clearPwdBtn.addEventListener('click', () => {
+            updateProfileAccess({ clearAdminPassword: true }, 'Personlig admin-passord fjernet');
+          });
+          pwdRow.appendChild(clearPwdBtn);
+        }
+
+        card.appendChild(pwdRow);
+      }
+
+      if (books.length > 0) {
+        const hiddenWrap = document.createElement('div');
+        hiddenWrap.className = 'admin-hidden-books-wrap';
+
+        const hiddenLabel = document.createElement('span');
+        hiddenLabel.className = 'admin-inline-note';
+        hiddenLabel.textContent = 'Skjulte bøker for denne kontoen (huk av for å skjule):';
+        hiddenWrap.appendChild(hiddenLabel);
+
+        const grid = document.createElement('div');
+        grid.className = 'admin-hidden-books-grid';
+        const hiddenSet = new Set(Array.isArray(prof.hiddenBooks) ? prof.hiddenBooks : []);
+
+        books.forEach((b) => {
+          const lbl = document.createElement('label');
+          lbl.className = 'admin-checkbox-label';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = hiddenSet.has(b.id);
+          cb.addEventListener('change', () => {
+            if (cb.checked) hiddenSet.add(b.id);
+            else hiddenSet.delete(b.id);
+            updateProfileAccess(
+              { hiddenBooks: Array.from(hiddenSet) },
+              'Synlighet oppdatert'
+            );
+          });
+          const txt = document.createElement('span');
+          txt.textContent = b.title;
+          lbl.append(cb, txt);
+          grid.appendChild(lbl);
+        });
+
+        hiddenWrap.appendChild(grid);
+        card.appendChild(hiddenWrap);
+      }
+
+      card.appendChild(statusEl);
+      el.adminUsersList.appendChild(card);
+    });
+  }
+
+  function renderAdminSecurityPane(overview) {
+    el.inputNewReaderPassword.disabled = Boolean(overview.passwordLockedByEnv);
+    el.readerPwdEnvNote.classList.toggle('hidden', !overview.passwordLockedByEnv);
+    el.inputNewGlobalAdminPassword.disabled = Boolean(overview.adminPasswordLockedByEnv);
+    el.adminPwdEnvNote.classList.toggle('hidden', !overview.adminPasswordLockedByEnv);
+    el.btnSaveAdminPasswords.disabled =
+      Boolean(overview.passwordLockedByEnv && overview.adminPasswordLockedByEnv);
+
+    el.lanUrlsList.replaceChildren();
+    const info = overview.serverInfo;
+    const port = (info && info.port) || 3000;
+    const ips = (info && info.lanIps) || [];
+    if (ips.length > 0) {
+      ips.forEach((ip) => {
+        const line = document.createElement('div');
+        line.textContent = `http://${ip}:${port}`;
+        el.lanUrlsList.appendChild(line);
+      });
+    } else {
+      const line = document.createElement('div');
+      line.textContent = `http://localhost:${port}`;
+      el.lanUrlsList.appendChild(line);
+    }
+  }
+
+  async function saveAdminPasswords() {
+    const readerPassword = el.inputNewReaderPassword.value;
+    const adminPassword = el.inputNewGlobalAdminPassword.value;
+    if (!readerPassword && !adminPassword) {
+      el.adminPasswordsStatus.textContent = 'Skriv inn minst ett nytt passord.';
+      el.adminPasswordsStatus.style.color = 'var(--text-secondary)';
+      el.adminPasswordsStatus.classList.remove('hidden');
+      return;
+    }
+
+    try {
+      await apiPost('/api/admin/passwords', {
+        ...(readerPassword ? { readerPassword } : {}),
+        ...(adminPassword ? { adminPassword } : {})
+      });
+      el.inputNewReaderPassword.value = '';
+      el.inputNewGlobalAdminPassword.value = '';
+      el.adminPasswordsStatus.textContent = 'Passord oppdatert!';
+      el.adminPasswordsStatus.style.color = 'var(--accent)';
+      el.adminPasswordsStatus.classList.remove('hidden');
+    } catch (err) {
+      el.adminPasswordsStatus.textContent = `Feil: ${err.message}`;
+      el.adminPasswordsStatus.style.color = '#f85149';
+      el.adminPasswordsStatus.classList.remove('hidden');
+    }
   }
 
   // ======================== EVENT LISTENERS ========================
-  // Password events
   el.btnPasswordSubmit.addEventListener('click', submitPassword);
   el.passwordInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') submitPassword();
@@ -1818,6 +2579,36 @@
   el.btnManageProfiles.addEventListener('click', () => {
     state.manageProfilesMode = !state.manageProfilesMode;
     renderProfileSelector();
+  });
+
+  el.btnProfileAdminUnlock.addEventListener('click', () => {
+    if (state.isAdmin) {
+      lockAdminMode();
+    } else {
+      openAdminLoginModal(null);
+    }
+  });
+
+  el.btnLogoutProfileScreen.addEventListener('click', logoutSession);
+
+  // Admin Login modal events
+  el.btnCloseAdminLogin.addEventListener('click', () => {
+    state.pendingAdminAction = null;
+    el.adminLoginModal.classList.add('hidden');
+  });
+  el.btnCancelAdminLogin.addEventListener('click', () => {
+    state.pendingAdminAction = null;
+    el.adminLoginModal.classList.add('hidden');
+  });
+  el.adminLoginModal.addEventListener('click', (e) => {
+    if (e.target === el.adminLoginModal) {
+      state.pendingAdminAction = null;
+      el.adminLoginModal.classList.add('hidden');
+    }
+  });
+  el.btnSubmitAdminLogin.addEventListener('click', submitAdminLogin);
+  el.inputAdminPassword.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitAdminLogin();
   });
 
   el.btnSwitchProfile.addEventListener('click', () => {
@@ -1864,7 +2655,7 @@
     applyFilterAndRender();
   });
 
-  // Shelf view mode toggle (Grid vs Rygg Carousel)
+  // Shelf view mode toggle
   document.querySelectorAll('[data-shelf-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const view = btn.dataset.shelfView;
@@ -1874,7 +2665,7 @@
     });
   });
 
-  // Grid cover type toggle (Forsats / Rygg / Baksats)
+  // Grid cover type toggle
   document.querySelectorAll('[data-grid-cover]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.gridCover;
@@ -1912,26 +2703,26 @@
     el.btnScaleDown.addEventListener('click', (e) => {
       e.stopPropagation();
       const book = state.filteredBooks[state.carouselIndex];
-      if (book) adjustBookSizeScale(book.id, -0.05);
+      if (book) adjustBookSizeScale(book, -0.05);
     });
   }
   if (el.btnScaleUp) {
     el.btnScaleUp.addEventListener('click', (e) => {
       e.stopPropagation();
       const book = state.filteredBooks[state.carouselIndex];
-      if (book) adjustBookSizeScale(book.id, 0.05);
+      if (book) adjustBookSizeScale(book, 0.05);
     });
   }
   if (el.btnReaderScaleDown) {
     el.btnReaderScaleDown.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (state.activeBook) adjustBookSizeScale(state.activeBook.id, -0.05);
+      if (state.activeBook) adjustBookSizeScale(state.activeBook, -0.05);
     });
   }
   if (el.btnReaderScaleUp) {
     el.btnReaderScaleUp.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (state.activeBook) adjustBookSizeScale(state.activeBook.id, 0.05);
+      if (state.activeBook) adjustBookSizeScale(state.activeBook, 0.05);
     });
   }
 
@@ -1977,7 +2768,7 @@
     }
   });
 
-  // Refresh & Settings
+  // Refresh & Settings / Admin Panel
   el.btnRefresh.addEventListener('click', loadLibrary);
   el.btnSettings.addEventListener('click', openSettingsModal);
   el.btnEmptySettings.addEventListener('click', openSettingsModal);
@@ -1985,50 +2776,71 @@
   el.settingsModal.addEventListener('click', (e) => {
     if (e.target === el.settingsModal) el.settingsModal.classList.add('hidden');
   });
-  el.btnSaveBooksDir.addEventListener('click', saveBooksDirectory);
+
+  el.btnSettingsAdminUnlock.addEventListener('click', () => {
+    openAdminLoginModal({ type: 'open-settings' });
+  });
+  el.btnSettingsUserLogout.addEventListener('click', logoutSession);
+  el.btnSettingsAdminLogout.addEventListener('click', logoutSession);
+  el.btnAdminLock.addEventListener('click', lockAdminMode);
+  el.btnSaveAdminPasswords.addEventListener('click', saveAdminPasswords);
+
+  document.querySelectorAll('[data-admin-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => switchAdminTab(btn.dataset.adminTab));
+  });
 
   if (el.inputUploadEbook) {
     el.inputUploadEbook.addEventListener('change', async (e) => {
       const files = Array.from(e.target.files || []);
       if (files.length === 0) return;
-      if (el.ebookUploadStatus) {
-        el.ebookUploadStatus.textContent = `Laster opp ${files.length} fil(er)...`;
-        el.ebookUploadStatus.style.color = 'var(--text-secondary)';
-      }
+      el.ebookUploadStatus.textContent = `Laster opp ${files.length} fil(er)...`;
+      el.ebookUploadStatus.style.color = 'var(--text-secondary)';
+      el.ebookUploadStatus.classList.remove('hidden');
 
       let successCount = 0;
       for (const file of files) {
         try {
-          const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('Kunne ikke lese filen'));
-            reader.readAsDataURL(file);
-          });
-          await apiPost('/api/upload-ebook', {
-            filename: file.name,
-            dataBase64: dataUrl,
-          });
+          const uploadFile = async (overwrite = false) => {
+            const headers = {
+              'Content-Type': 'application/octet-stream',
+              'X-Requested-With': 'fetch',
+              'X-Filename': encodeURIComponent(file.name)
+            };
+            if (overwrite) headers['X-Overwrite'] = 'true';
+            return fetch('/api/upload-ebook', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers,
+              body: file
+            });
+          };
+
+          let res = await uploadFile(false);
+          if (res.status === 409) {
+            if (window.confirm(`"${file.name}" finnes allerede. Vil du overskrive den?`)) {
+              res = await uploadFile(true);
+            } else {
+              continue;
+            }
+          }
+          const json = await parseJsonSafe(res);
+          if (!res.ok) {
+            throw new Error((json && json.error) || `HTTP ${res.status}`);
+          }
           successCount++;
         } catch (err) {
           console.error('Upload failed:', err);
-          if (el.ebookUploadStatus) {
-            el.ebookUploadStatus.textContent = `Feil: ${err.message}`;
-            el.ebookUploadStatus.style.color = 'var(--danger)';
-          }
+          el.ebookUploadStatus.textContent = `Feil: ${err.message}`;
+          el.ebookUploadStatus.style.color = '#f85149';
         }
       }
 
       el.inputUploadEbook.value = '';
       if (successCount > 0) {
-        if (el.ebookUploadStatus) {
-          el.ebookUploadStatus.textContent = `Lastet opp ${successCount} e-bok/PDF! Oppdaterer biblioteket...`;
-          el.ebookUploadStatus.style.color = 'var(--accent)';
-        }
-        await loadLibrary();
-        if (el.ebookUploadStatus) {
-          el.ebookUploadStatus.textContent = `Ferdig! ${successCount} bok/bøker lagt til i biblioteket.`;
-        }
+        el.ebookUploadStatus.textContent = `Lastet opp ${successCount} e-bok/PDF! Oppdaterer biblioteket...`;
+        el.ebookUploadStatus.style.color = 'var(--accent)';
+        await Promise.all([loadLibrary(), refreshAdminOverview()]);
+        el.ebookUploadStatus.textContent = `Ferdig! ${successCount} bok/bøker lagt til i biblioteket.`;
       }
     });
   }
@@ -2092,7 +2904,6 @@
     goToPage(idx);
   });
 
-  // Clicking the chapter pill in the topbar opens the Chapters drawer
   el.readerChapterBadge.addEventListener('click', () => {
     if (isDrawerOpen() && state.drawerTab === 'chapters') {
       setDrawerOpen(false);
@@ -2101,7 +2912,6 @@
     }
   });
 
-  // View Options Popover Toggle
   el.btnViewOptions.addEventListener('click', (e) => {
     e.stopPropagation();
     const isHidden = el.viewOptionsPopover.classList.toggle('hidden');
@@ -2119,7 +2929,6 @@
     }
   });
 
-  // Reader mode switcher (1 side, 2 sider, Scroll) inside popover
   document.querySelectorAll('[data-reader-mode]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.readerMode;
@@ -2135,16 +2944,10 @@
     });
   });
 
-  // Per-book synchronized Forsats alene toggle
   el.btnSpreadOffset.addEventListener('click', toggleBookForsatsAlene);
-
-  // Zoom Reset button
   el.btnZoomReset.addEventListener('click', () => resetZoom(true));
-
-  // Mouse wheel / Trackpad zoom in Reader Stage
   el.readerStage.addEventListener('wheel', zoomByWheel, { passive: false });
 
-  // Drag-to-pan when zoomed + Click on page to toggle top/bottom bars
   el.readerStage.addEventListener('pointerdown', (e) => {
     if (e.target === el.zonePrev || e.target === el.zoneNext) return;
     if (e.button !== 0) return;
@@ -2181,7 +2984,6 @@
     }
   });
 
-  // Double-click on page to quick-toggle zoom (1x <-> 2x)
   el.readerStage.addEventListener('dblclick', (e) => {
     if (e.target === el.zonePrev || e.target === el.zoneNext) return;
     if (state.zoomScale > 1.05) {
@@ -2198,7 +3000,6 @@
     }
   });
 
-  // Drawer tabs (Chapters vs Bookmarks)
   document.querySelectorAll('[data-drawer-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.drawerTab;
@@ -2210,7 +3011,6 @@
     });
   });
 
-  // Chapters & Bookmarks controls (Left drawer)
   el.btnBookmarkToggle.addEventListener('click', toggleBookmarkOnCurrentPage);
   el.btnBookmarksDrawer.addEventListener('click', () => {
     setDrawerOpen(!isDrawerOpen());
@@ -2227,7 +3027,6 @@
     if (e.key === 'Enter') saveBookmarkWithNote();
   });
 
-  // Fullscreen
   el.btnFullscreen.addEventListener('click', toggleFullscreen);
   function toggleFullscreen() {
     if (!document.fullscreenElement) {
@@ -2237,7 +3036,6 @@
     }
   }
 
-  // Touch swipe in Reader Stage (when not zoomed)
   let readerTouchStartX = 0;
   let readerTouchStartY = 0;
   el.readerStage.addEventListener(
@@ -2269,7 +3067,6 @@
     { passive: true }
   );
 
-  // Keyboard shortcuts
   window.addEventListener('keydown', (e) => {
     const tag = document.activeElement ? document.activeElement.tagName : '';
     const isInput = tag === 'INPUT' || tag === 'TEXTAREA';
@@ -2288,7 +3085,6 @@
       return;
     }
 
-    // In Shelf View
     if (!state.activeBook) {
       if (e.key === '/') {
         e.preventDefault();
@@ -2308,7 +3104,6 @@
       return;
     }
 
-    // In Reader View
     if (e.key === 'Escape') {
       if (!el.exportModal.classList.contains('hidden')) {
         el.exportModal.classList.add('hidden');
@@ -2355,6 +3150,5 @@
     }
   });
 
-  // Boot with password check
   checkAuthAndBoot();
 })();
