@@ -1,0 +1,1892 @@
+:root {
+  --bg-canvas: #0d1014;
+  --bg-surface: #14171c;
+  --bg-elevated: #1b1f26;
+  --bg-btn: #1d2128;
+  --bg-btn-hover: #252a33;
+  --bg-btn-active: #2d333e;
+  --accent: #00A3FF;
+  --accent-hover: #22b0ff;
+  --accent-subtle: rgba(0, 163, 255, 0.14);
+  --border-default: #22262f;
+  --border-muted: #181b22;
+  --border-hover: #2f3542;
+  --border-w: 1.5px;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #656d76;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Noto Sans", Helvetica, Arial, sans-serif;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --border-w: 1px;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.accent-icon {
+  color: var(--accent);
+}
+
+/* ======================== AMBIENT RANDOM PAGE BACKDROP ======================== */
+.ambient-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background-color: var(--bg-canvas);
+  transition: opacity 0.35s var(--ease-out);
+}
+
+.ambient-backdrop.is-hidden {
+  opacity: 0;
+}
+
+.ambient-backdrop-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 22%;
+  opacity: 0;
+  filter: grayscale(100%) contrast(1.15) blur(1.5px);
+  transform: scale(1.03);
+  transition: opacity 0.6s var(--ease-out);
+}
+
+.ambient-backdrop-img.is-loaded {
+  opacity: 0.085;
+}
+
+.ambient-backdrop-tint {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(13, 16, 20, 0.72);
+}
+
+/* ======================== SCREENS ======================== */
+.screen {
+  display: none;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+
+.screen.active {
+  display: flex;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ======================== 0A) PASSWORD SCREEN ======================== */
+#password-screen {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.password-box {
+  width: 100%;
+  max-width: 340px;
+  padding: 28px 24px;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.password-icon-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.password-box h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.password-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.password-error {
+  font-size: 12px;
+  color: #f85149;
+}
+
+.export-range-row {
+  display: flex;
+  gap: 12px;
+}
+
+.export-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ======================== 0B) PROFILE SELECTOR (Larger Netflix-style) ======================== */
+#profile-screen {
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  overflow-y: auto;
+}
+
+.profile-screen-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 960px;
+  width: 100%;
+  text-align: center;
+}
+
+.profile-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 28px;
+  color: var(--text-primary);
+}
+
+.profile-heading {
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  margin-bottom: 38px;
+}
+
+.profiles-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 28px;
+  margin-bottom: 44px;
+}
+
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 156px;
+  cursor: pointer;
+}
+
+.profile-avatar-tile {
+  position: relative;
+  width: 142px;
+  height: 142px;
+  border-radius: var(--radius-lg);
+  background-color: var(--bg-surface);
+  border: 2px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  transition: border-color 0.18s var(--ease-out), transform 0.18s var(--ease-out), background-color 0.18s var(--ease-out);
+}
+
+.profile-avatar-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.profile-card:hover .profile-avatar-tile {
+  border-color: var(--accent);
+  transform: translateY(-4px) scale(1.02);
+}
+
+.profile-card.add-profile-card .profile-avatar-tile {
+  background-color: var(--bg-canvas);
+  border-style: dashed;
+  color: var(--text-secondary);
+  font-size: 44px;
+  font-weight: 400;
+}
+
+.profile-card.add-profile-card:hover .profile-avatar-tile {
+  color: var(--accent);
+  border-color: var(--accent);
+  background-color: var(--bg-surface);
+}
+
+.profile-edit-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(13, 16, 20, 0.75);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profiles-grid.manage-mode .profile-card:not(.add-profile-card) .profile-edit-overlay {
+  display: flex;
+}
+
+.profile-card-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+  transition: color 0.14s ease;
+}
+
+.profile-card:hover .profile-card-name {
+  color: var(--text-primary);
+}
+
+.profile-card-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -8px;
+}
+
+/* Profile editor modal */
+.profile-editor-layout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.avatar-preview-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-preview-box {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-lg);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 600;
+  overflow: hidden;
+}
+
+.avatar-preview-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-upload-label {
+  cursor: pointer;
+}
+
+.profile-fields-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.text-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.text-input:focus {
+  border-color: var(--accent);
+}
+
+.color-swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.color-swatch.active {
+  border-color: #ffffff;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: var(--border-w) solid var(--border-muted);
+}
+
+/* Topbar profile switch pill */
+.profile-pill-btn {
+  padding: 0 10px 0 6px;
+  gap: 7px;
+}
+
+.profile-pill-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background-color: var(--accent);
+  color: #0d1014;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.profile-pill-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ======================== BUTTONS & CONTROLS ======================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background-color: var(--bg-btn);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.1s ease;
+}
+
+.btn:hover {
+  background-color: var(--bg-btn-hover);
+  border-color: var(--border-hover);
+}
+
+.btn:active {
+  background-color: var(--bg-btn-active);
+  transform: scale(0.97);
+}
+
+.btn.active {
+  background-color: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-primary {
+  background-color: var(--accent);
+  color: #090c10;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.btn-icon {
+  width: 32px;
+  padding: 0;
+}
+
+.btn-icon.btn-sm {
+  width: 28px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: var(--bg-btn);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: 10px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.segmented-control.full-width {
+  width: 100%;
+}
+
+.segmented-control.full-width .seg-btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.seg-btn.seg-icon-only {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.seg-btn:hover {
+  color: var(--text-primary);
+}
+
+.seg-btn.active {
+  color: var(--accent);
+  background-color: var(--bg-btn);
+  border-color: var(--border-default);
+}
+
+/* ======================== TOPBAR & SUBBAR ======================== */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 50px;
+  padding: 8px 16px;
+  background-color: rgba(20, 23, 28, 0.86);
+  backdrop-filter: blur(10px);
+  border-bottom: var(--border-w) solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.brand-name {
+  letter-spacing: -0.3px;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 220px;
+  min-width: 90px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-box input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color 0.14s ease;
+}
+
+.search-box input:focus {
+  border-color: var(--accent);
+}
+
+.subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 16px;
+  background-color: rgba(13, 16, 20, 0.78);
+  backdrop-filter: blur(8px);
+  border-bottom: var(--border-w) solid var(--border-muted);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.subbar::-webkit-scrollbar {
+  display: none;
+}
+
+.filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab-btn {
+  height: 36px;
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.14s ease, border-color 0.14s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.subbar-info {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ======================== SHELF MAIN ======================== */
+.shelf-main {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+
+.shelf-view {
+  display: none;
+  width: 100%;
+  min-height: 100%;
+}
+
+.shelf-view.active {
+  display: block;
+}
+
+/* 1) GRID VIEW (Floating Book Cover & Lowkey Text) */
+.books-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+  gap: 36px 28px;
+  padding: 32px 28px 44px;
+  max-width: 1460px;
+  margin: 0 auto;
+  align-items: end;
+}
+
+.books-grid.spine-mode-grid {
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+}
+
+.book-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+  cursor: pointer;
+  transition: transform 0.2s var(--ease-out);
+}
+
+.book-card:hover {
+  transform: translateY(-4px);
+}
+
+.book-card-thumb {
+  position: relative;
+  width: var(--grid-book-w, 88%);
+  aspect-ratio: var(--grid-book-ar, 0.732);
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.48);
+  transition:
+    border-color 0.18s var(--ease-out),
+    box-shadow 0.2s var(--ease-out),
+    width 0.22s var(--ease-out),
+    aspect-ratio 0.22s var(--ease-out);
+}
+
+.book-card:hover .book-card-thumb {
+  border-color: var(--accent);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.62);
+}
+
+.book-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.card-badges {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+}
+
+.card-badge {
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  background-color: rgba(13, 16, 20, 0.88);
+  color: var(--accent);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.card-cover-switcher {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 4;
+}
+
+.book-card:hover .card-cover-switcher,
+.spine-item.active .card-cover-switcher {
+  opacity: 1;
+}
+
+.mini-cover-btn {
+  padding: 2px 6px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: rgba(13, 16, 20, 0.92);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.mini-cover-btn:hover,
+.mini-cover-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.book-card-body {
+  width: 100%;
+  padding: 10px 4px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.book-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.book-card-meta {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* 2) RYGG CAROUSEL VIEW (Bookshelf Style) */
+#spine-view-container.active {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  padding: 18px 20px 24px;
+  gap: 18px;
+}
+
+.carousel-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 1420px;
+  gap: 12px;
+}
+
+.carousel-nav-btn {
+  width: 42px;
+  height: 72px;
+  flex-shrink: 0;
+  background-color: rgba(29, 33, 40, 0.86);
+  backdrop-filter: blur(8px);
+}
+
+.spine-stage {
+  flex: 1;
+  height: clamp(420px, 64vh, 560px);
+  background: transparent;
+  border: none;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bookshelf-ledge {
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  bottom: 0;
+  height: 12px;
+  background-color: rgba(27, 31, 38, 0.95);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: 4px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.65);
+  z-index: 1;
+}
+
+.spine-track {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 0 50% 12px 50%;
+  height: 100%;
+  transition: transform 0.3s var(--ease-out);
+  will-change: transform;
+  z-index: 2;
+}
+
+.spine-item {
+  position: relative;
+  height: 450px;
+  width: 56px;
+  flex-shrink: 0;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: 4px 4px 2px 2px;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    width 0.28s var(--ease-out),
+    height 0.28s var(--ease-out),
+    border-color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.2s var(--ease-out);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.84;
+  box-shadow:
+    -4px 4px 14px rgba(0, 0, 0, 0.48),
+    inset 2px 0 4px rgba(255, 255, 255, 0.08),
+    inset -2px 0 5px rgba(0, 0, 0, 0.42);
+}
+
+.spine-item:hover {
+  opacity: 0.98;
+  border-color: var(--border-hover);
+  transform: translateY(-3px);
+}
+
+.spine-item.active {
+  opacity: 1;
+  border: 2px solid var(--accent);
+  background-color: var(--bg-elevated);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+  z-index: 5;
+}
+
+.spine-item.active:hover {
+  transform: none;
+}
+
+.spine-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Generated Spine & Cover when a book (or EPUB/PDF) has no separate c2/c1 image */
+.generated-spine {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 14px 4px;
+}
+
+.generated-spine-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.22;
+  filter: blur(6px) saturate(0.8);
+  pointer-events: none;
+}
+
+.generated-spine-title {
+  position: relative;
+  z-index: 2;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 90%;
+}
+
+.generated-cover {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 18px;
+  text-align: center;
+  gap: 10px;
+}
+
+.generated-cover-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background-color: var(--bg-canvas);
+  color: var(--accent);
+  border: 1px solid var(--border-default);
+}
+
+.generated-cover-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.size-scale-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.size-scale-label {
+  min-width: 42px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* EPUB Reader Page Styling */
+.epub-page-card {
+  width: min(560px, 44vw);
+  height: 100%;
+  max-height: 100%;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: 3px;
+  padding: 28px 34px;
+  overflow-y: auto;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.68;
+  text-align: left;
+  user-select: text;
+}
+
+.spread-container.single-mode .epub-page-card {
+  width: min(680px, 92vw);
+}
+
+.epub-page-card h1,
+.epub-page-card h2,
+.epub-page-card h3 {
+  color: var(--text-primary);
+  margin: 0.6em 0 0.4em;
+  line-height: 1.3;
+}
+
+.epub-page-card p {
+  margin-bottom: 0.9em;
+}
+
+.epub-page-card img,
+.epub-page-card svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 12px auto;
+  border-radius: 3px;
+}
+
+.spine-item:not(.active) .card-cover-switcher {
+  display: none;
+}
+
+.carousel-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+  padding: 14px 18px;
+  background-color: rgba(20, 23, 28, 0.86);
+  backdrop-filter: blur(10px);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.carousel-book-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.carousel-book-meta {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.carousel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* ======================== READER SCREEN (Smooth Animated Bars & Drawer!) ======================== */
+.reader-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 46px;
+  padding: 0 12px;
+  background-color: var(--bg-surface);
+  border-bottom: var(--border-w) solid var(--border-default);
+  flex-shrink: 0;
+  z-index: 30;
+  transition:
+    height 0.26s var(--ease-out),
+    opacity 0.22s var(--ease-out),
+    transform 0.26s var(--ease-out),
+    border-bottom-width 0.26s var(--ease-out);
+}
+
+.reader-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.reader-topbar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.reader-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.reader-book-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Clickable Calm Grey Chapter Pill */
+.chapter-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: var(--bg-btn);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: 12px;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.chapter-pill:hover {
+  background-color: var(--bg-btn-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+/* View Settings Popover */
+.popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.view-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 235px;
+  padding: 12px;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-hover);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 50;
+  transform-origin: top right;
+  animation: popoverIn 0.18s var(--ease-out);
+}
+
+@keyframes popoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.popover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.popover-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.popover-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Reader Bottom Bar */
+.reader-bottombar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  padding: 0 12px;
+  background-color: var(--bg-surface);
+  border-top: var(--border-w) solid var(--border-default);
+  flex-shrink: 0;
+  z-index: 30;
+  overflow: hidden;
+  transition:
+    height 0.26s var(--ease-out),
+    opacity 0.22s var(--ease-out),
+    transform 0.26s var(--ease-out),
+    border-top-width 0.26s var(--ease-out);
+}
+
+.scrubber-page-info {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 58px;
+  text-align: right;
+}
+
+/* Smooth animated hide/show for top & bottom bars */
+#reader-screen.bars-hidden .reader-topbar {
+  height: 0;
+  opacity: 0;
+  transform: translateY(-10px);
+  border-bottom-width: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#reader-screen.bars-hidden .reader-bottombar {
+  height: 0;
+  opacity: 0;
+  transform: translateY(10px);
+  border-top-width: 0;
+  pointer-events: none;
+}
+
+/* Reader Viewport: Row flex container where Left Drawer smoothly pushes/shrinks book stage */
+.reader-viewport {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  background-color: var(--bg-canvas);
+}
+
+/* LEFT Side Drawer (Chapters & Bookmarks) with smooth slide animation */
+.bookmarks-drawer {
+  width: 295px;
+  max-width: 82vw;
+  height: 100%;
+  background-color: var(--bg-surface);
+  border-right: var(--border-w) solid var(--border-default);
+  flex-shrink: 0;
+  z-index: 20;
+  overflow: hidden;
+  transition:
+    width 0.28s var(--ease-out),
+    opacity 0.22s var(--ease-out),
+    border-right-width 0.28s var(--ease-out);
+}
+
+.bookmarks-drawer.is-closed {
+  width: 0;
+  opacity: 0;
+  border-right-width: 0;
+  pointer-events: none;
+}
+
+.drawer-inner {
+  width: 295px;
+  max-width: 82vw;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.reader-stage {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.reader-stage.is-zoomed {
+  cursor: grab;
+}
+
+.reader-stage.is-zoomed.is-dragging {
+  cursor: grabbing;
+}
+
+.zoom-pan-layer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.spread-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  transition: padding 0.26s var(--ease-out);
+}
+
+#reader-screen.bars-hidden .spread-container {
+  padding: 0;
+}
+
+.spread-container .reader-page-img {
+  max-height: 100%;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-muted);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.spread-container.is-spread .reader-page-img {
+  max-width: calc(50% - 2px);
+}
+
+/* Invisible click zones on left/right edges for fast page turning */
+.stage-nav-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.reader-stage.is-zoomed .stage-nav-zone {
+  pointer-events: none;
+}
+
+.stage-nav-zone.left {
+  left: 0;
+}
+
+.stage-nav-zone.right {
+  right: 0;
+}
+
+/* Vertical Scroll Mode */
+.reader-vertical {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px 32px;
+}
+
+.vertical-page-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 920px;
+  width: 100%;
+}
+
+.vertical-page-wrapper img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: var(--border-w) solid var(--border-muted);
+  background-color: var(--bg-surface);
+}
+
+.vertical-page-caption {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Drawer inner styles */
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+.drawer-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.drawer-tab {
+  height: 28px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.drawer-tab.active {
+  color: var(--text-primary);
+  background-color: var(--bg-btn);
+  border-color: var(--border-default);
+}
+
+.drawer-pane {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.drawer-pane.active {
+  display: flex;
+}
+
+.drawer-add-form {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: var(--border-w) solid var(--border-muted);
+}
+
+.drawer-add-form input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.drawer-add-form input:focus {
+  border-color: var(--accent);
+}
+
+.drawer-subnote {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: var(--border-w) solid var(--border-muted);
+}
+
+.bookmarks-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bookmark-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.bookmark-item:hover {
+  border-color: var(--border-hover);
+  background-color: var(--bg-elevated);
+}
+
+.bookmark-item.current {
+  border-color: var(--accent);
+}
+
+.bookmark-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bookmark-page {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.bookmark-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ======================== MATERIAL 3 EXPRESSIVE SCRUBBER BAR ======================== */
+.scrubber-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.scrubber-track-Wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 22px;
+}
+
+.scrubber-visual-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg-btn);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.scrubber-visual-fill {
+  height: 100%;
+  width: 0%;
+  background-color: var(--accent);
+  border-radius: 4px;
+  transition: width 0.08s ease;
+}
+
+.scrubber-bookmarks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Ticks have a thick border matching --bg-surface so they physically cut through the progress bar! */
+.scrubber-ch-tick,
+.scrubber-bm-tick {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 16px;
+  border: 2.5px solid var(--bg-surface);
+  border-radius: 4px;
+  transform: translate(-50%, -50%);
+}
+
+.scrubber-ch-tick {
+  background-color: var(--text-secondary);
+}
+
+.scrubber-bm-tick {
+  background-color: var(--accent);
+}
+
+/* Invisible interactive range input on top for effortless dragging/clicking */
+#page-scrubber {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 5;
+  margin: 0;
+}
+
+/* ======================== MODAL & EMPTY STATE ======================== */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+}
+
+.empty-box {
+  max-width: 440px;
+  padding: 24px;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.empty-box p {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+code, kbd {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 1px 5px;
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.76);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 100;
+}
+
+.modal {
+  width: 100%;
+  max-width: 500px;
+  background-color: var(--bg-surface);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  animation: popoverIn 0.18s var(--ease-out);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: var(--border-w) solid var(--border-default);
+}
+
+.modal-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.input-row input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
+.input-row input:focus {
+  border-color: var(--accent);
+}
+
+.form-help {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.form-status {
+  font-size: 12px;
+  padding: 6px 10px;
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.info-panel {
+  padding: 10px 12px;
+  background-color: var(--bg-canvas);
+  border: var(--border-w) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ======================== RESPONSIVE (MOBILE) ======================== */
+@media (max-width: 768px) {
+  .hide-sm {
+    display: none !important;
+  }
+  #grid-cover-selector {
+    display: none;
+  }
+  .topbar {
+    padding: 6px 10px;
+    gap: 8px;
+  }
+  .topbar-left {
+    gap: 8px;
+  }
+  .topbar-right {
+    gap: 6px;
+  }
+  .books-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 20px 14px;
+    padding: 16px;
+  }
+  .spine-stage {
+    height: clamp(300px, 52vh, 380px);
+  }
+  .reader-topbar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .reader-book-title {
+    font-size: 13px;
+  }
+  .chapter-pill {
+    max-width: 110px;
+    font-size: 11px;
+    padding: 0 8px;
+  }
+  .bookmarks-drawer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+  }
+  .profile-heading {
+    font-size: 28px;
+    margin-bottom: 28px;
+  }
+  .profile-card {
+    width: 128px;
+  }
+  .profile-avatar-tile {
+    width: 116px;
+    height: 116px;
+    font-size: 32px;
+  }
+  .profile-editor-layout {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .hide-xs {
+    display: none !important;
+  }
+  .brand-name {
+    display: none;
+  }
+  .profile-pill-btn {
+    padding: 0;
+    width: 32px;
+    justify-content: center;
+  }
+}

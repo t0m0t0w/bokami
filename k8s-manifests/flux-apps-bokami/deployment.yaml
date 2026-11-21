@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bokami
+  labels:
+    app.kubernetes.io/name: bokami
+    app.kubernetes.io/instance: bokami
+spec:
+  replicas: 1
+  # RWO volumes: Unngå to samtidige pods ved rullende oppdatering
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bokami
+      app.kubernetes.io/instance: bokami
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bokami
+        app.kubernetes.io/instance: bokami
+    spec:
+      # Kjør sikkert som standard node-bruker (uid 1000)
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bokami
+          # Docker-image bygget automatisk via GitHub Actions
+          image: ghcr.io/t0m0t0w/bokami:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "3000"
+            - name: DATA_DIR
+              value: "/app/data"
+            - name: BOOKS_DIR
+              value: "/app/books"
+            # Valgfritt: overstyr standardpassordet ("passord") – helst via Kubernetes Secret
+            # - name: BOKAMI_PASSWORD
+            #   value: "ditt-passord"
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: books
+              mountPath: /app/books
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bokami-data
+        - name: books
+          persistentVolumeClaim:
+            claimName: bokami-books

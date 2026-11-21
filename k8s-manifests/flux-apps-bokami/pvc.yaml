@@ -1,0 +1,30 @@
+# Persistent storage for Bokami (Longhorn)
+# bokami-data: Konfigurasjon, profiler, bokmerker og lese-progresjon (~2GiB)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bokami-data
+  labels:
+    app.kubernetes.io/name: bokami
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: bokami
+  resources:
+    requests:
+      storage: 2Gi
+---
+# bokami-books: Bøkene (bildefilene) (20-50GiB etter behov)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bokami-books
+  labels:
+    app.kubernetes.io/name: bokami
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: bokami
+  resources:
+    requests:
+      storage: 20Gi

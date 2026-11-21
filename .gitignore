@@ -1,0 +1,11 @@
+node_modules/
+cloudflared.exe
+books/
+data/
+start.bat
+setup-domene.bat
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

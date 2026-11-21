@@ -1,0 +1,75 @@
+# Bokami
+
+Minimalistisk, rask bokleser og digital bokhylle for bildeserier, `.pdf` og `.epub`, laget i GitHub Dark / VS Code gråtonestil.
+
+## Støttede bokformater
+
+Legg bøkene dine i `books/`-mappen (eller velg en annen mappe direkte under **Innstillinger (⚙)** i nettleseren):
+
+1. **Bildeserie (1 bok per undermappe):**
+   Støtter `.jpg`, `.jpeg`, `.png`, `.webp` og `.avif`.
+   ```text
+   books/
+     Min Bok 1/
+       c1.jpg      # Forside / forsats (valgfri)
+       c2.jpg      # Bokrygg / spine (valgfri)
+       c3.jpg      # Bakside / baksats (valgfri)
+       0001.jpg    # Side 1
+       0002.jpg    # Side 2
+       ...
+   ```
+2. **PDF og EPUB:**
+   Legg `.pdf`- eller `.epub`-filer direkte i `books/`, i en egen undermappe (gjerne sammen med `c1.jpg` / `c2.jpg` / `c3.jpg`), eller last opp filer direkte fra **Innstillinger (⚙)**.
+
+## Funksjoner
+
+* **To bokhylle-moduser:**
+  * **Rutenett (Grid):** Minimalistisk rutenett med raskt bytte mellom forsats (`c1`), rygg (`c2`) og baksats (`c3`).
+  * **Rygg-karusell:** Horisontal bokhylle der bøkene står som bokrygger (`c2`), og den valgte boka i midten utvider seg og viser forsiden (`c1`) eller baksiden (`c3`).
+* **Leser (Player):**
+  * **2-siders oppslag** på PC (med valgfritt `Forsats alene`), **enkeltside** (standard på mobil) og **vertikal scroll**.
+  * Zoom & panorering, hurtigtaster og forhåndslasting av kommende sider.
+* **Profiler, kapitler og bokmerker:**
+  * Flere brukerprofiler lagres på serveren (`data/profiles.json`) med individuell leseprogresjon, preferanser og bokmerker med notater.
+  * Felles kapitler lagres i `book.json` inne i hver bokmappe (eller i `data/bookmeta.json` for enkeltstående PDF/EPUB).
+* **Eksport og passord:**
+  * Eksporter valgt sideområde fra bildeserier til **PDF** eller **ZIP** direkte fra leseren.
+  * Enkel passordbeskyttelse på serveren (standardpassord `passord` hvis ingenting annet er konfigurert).
+
+## Starte lokalt
+
+Krever **Node.js 22+**. Ingen `npm install` er nødvendig.
+
+```bash
+node server.js
+```
+
+* **På PC:** Åpne `http://localhost:3000`
+* **På mobil (LAN):** Åpne LAN-adressen som vises i konsollen eller under **Innstillinger (⚙)**.
+
+## Kjøre med Docker
+
+Prebygde images publiseres til GitHub Container Registry (`ghcr.io/t0m0t0w/bokami:latest`):
+
+```bash
+docker run -d \
+  --name bokami \
+  -p 3000:3000 \
+  -e BOKAMI_PASSWORD=ditt-passord \
+  -v $(pwd)/books:/app/books \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/t0m0t0w/bokami:latest
+```
+
+## Miljøvariabler
+
+| Variabel | Standard | Beskrivelse |
+| --- | --- | --- |
+| `PORT` | `3000` | Porten HTTP-serveren lytter på |
+| `BOOKS_DIR` | `./books` | Mappe som inneholder bøker |
+| `DATA_DIR` | `./data` | Mappe for `config.json`, `profiles.json` og cached omslag |
+| `BOKAMI_PASSWORD` | `passord` | Overstyrer passordet for innlogging (kan også bruke `PASSWORD` eller `data/config.json`) |
+
+## Kubernetes / Flux
+
+Manifester for Kubernetes og Flux finnes i [`k8s-manifests/`](./k8s-manifests/README.md).

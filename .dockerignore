@@ -1,0 +1,15 @@
+node_modules/
+.git/
+.github/
+.gitignore
+.gitattributes
+.dockerignore
+k8s-manifests/
+README.md
+LICENSE
+*.bat
+cloudflared.exe
+books/
+data/
+*.log
+.gemini/

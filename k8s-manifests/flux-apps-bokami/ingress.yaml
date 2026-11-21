@@ -1,0 +1,21 @@
+# Traefik terminerer automatisk TLS med cert-manager wildcard-sertifikatet for *.glem.men
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bokami
+  labels:
+    app.kubernetes.io/name: bokami
+    app.kubernetes.io/instance: bokami
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: bokami.glem.men
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bokami
+                port:
+                  number: 3000

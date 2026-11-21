@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1014" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=7" />
+  <title>Bokami</title>
+  <link rel="stylesheet" href="/styles.css?v=7" />
+</head>
+<body>
+  <!-- ======================== AMBIENT HEAVILY-TINTED RANDOM PAGE BACKDROP ======================== -->
+  <div id="ambient-backdrop" class="ambient-backdrop" aria-hidden="true">
+    <img id="ambient-backdrop-img" class="ambient-backdrop-img" alt="" />
+    <div class="ambient-backdrop-tint"></div>
+  </div>
+
+  <!-- ======================== 0A) PASSWORD GATE SCREEN ======================== -->
+  <div id="password-screen" class="screen">
+    <div class="password-box">
+      <div class="password-icon-wrap">
+        <svg viewBox="0 0 16 16" width="24" height="24" fill="currentColor" class="accent-icon">
+          <path d="M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z"></path>
+        </svg>
+      </div>
+      <h2>Passord</h2>
+      <div class="password-form">
+        <input type="password" id="password-input" class="text-input" placeholder='Skriv inn "passord"' autocomplete="current-password" />
+        <button type="button" class="btn btn-primary" id="btn-password-submit">Lås opp</button>
+      </div>
+      <p class="password-error hidden" id="password-error">Feil passord</p>
+    </div>
+  </div>
+
+  <!-- ======================== 0B) PROFILE SELECTOR SCREEN (No logo) ======================== -->
+  <div id="profile-screen" class="screen">
+    <div class="profile-screen-inner">
+      <h1 class="profile-heading">Hvem leser?</h1>
+
+      <div class="profiles-grid" id="profiles-grid"></div>
+
+      <div class="profile-footer-actions">
+        <button type="button" class="btn" id="btn-manage-profiles">Rediger profiler</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== 1) TOP NAVIGATION (SHELF VIEW) ======================== -->
+  <div id="shelf-screen" class="screen">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand" id="brand-logo" title="Bokami">
+          <svg class="icon accent-icon" viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+            <path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.743 3.743 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.622-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.755 4.75l-.004 7.322a3.752 3.752 0 0 1 1.992-.572H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"></path>
+          </svg>
+          <span class="brand-name">bokami</span>
+          <span class="badge" id="book-count-badge">0</span>
+        </div>
+
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+          </svg>
+          <input type="text" id="search-input" placeholder="Søk..." autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <!-- View Switcher (Icon-only): Grid vs Rygg Carousel -->
+        <div class="segmented-control" role="group" aria-label="Visningsmodus">
+          <button type="button" class="seg-btn seg-icon-only active" data-shelf-view="grid" id="btn-view-grid" title="Rutenett">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+              <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3Zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3Zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3Zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3Z"></path>
+            </svg>
+          </button>
+          <button type="button" class="seg-btn seg-icon-only" data-shelf-view="spine" id="btn-view-spine" title="Rygg-karusell">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+              <path d="M1 2.75A.75.75 0 0 1 1.75 2h1.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1-.75-.75V2.75Zm4 0A.75.75 0 0 1 5.75 2h4.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.5a.75.75 0 0 1-.75-.75V2.75Zm7 0a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1-.75-.75V2.75Z"></path>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Sub-option for Grid Cover Type (Forsats / Rygg / Baksats) -->
+        <div class="segmented-control" id="grid-cover-selector" title="Velg hva som vises i rutenettet">
+          <button type="button" class="seg-btn active" data-grid-cover="c1">Forsats</button>
+          <button type="button" class="seg-btn" data-grid-cover="c2">Rygg</button>
+          <button type="button" class="seg-btn" data-grid-cover="c3">Baksats</button>
+        </div>
+
+        <button type="button" class="btn btn-icon" id="btn-refresh" title="Oppdater bokhylle">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.835ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"></path>
+          </svg>
+        </button>
+
+        <button type="button" class="btn btn-icon" id="btn-settings" title="Server- og mappeinnstillinger">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.973 7.973 0 0 1-.704 1.218c-.428.609-1.176.806-1.82.63l-1.103-.303c-.066-.019-.176-.011-.299.071a5.903 5.903 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.645-.716 1.195-1.459 1.26a8.094 8.094 0 0 1-1.402 0c-.743-.065-1.289-.615-1.459-1.26l-.288-1.107c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.364-1.891l.814-.806c.049-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.814-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.218c.428-.609 1.176-.806 1.82-.63l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.009.645 6.556.095 7.299.03 7.532.01 7.766 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.03.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"></path>
+          </svg>
+        </button>
+
+        <!-- Active Profile Pill (Switch Profile) -->
+        <button type="button" class="btn profile-pill-btn" id="btn-switch-profile" title="Bytt brukerprofil">
+          <span class="profile-pill-avatar" id="current-profile-avatar"></span>
+          <span class="hide-xs" id="current-profile-name">Profil</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Filter subbar -->
+    <div class="subbar">
+      <div class="filter-tabs" role="tablist">
+        <button type="button" class="tab-btn active" data-filter="all">Alle bøker</button>
+        <button type="button" class="tab-btn" data-filter="reading">Påbegynt</button>
+        <button type="button" class="tab-btn" data-filter="bookmarked">Mine bokmerker</button>
+        <button type="button" class="tab-btn" data-filter="completed">Fullført</button>
+      </div>
+      <div class="subbar-info hide-xs" id="subbar-status">Laster bokhylle...</div>
+    </div>
+
+    <!-- Main Shelf Container -->
+    <main class="shelf-main">
+      <!-- 1) GRID VIEW -->
+      <section id="grid-view-container" class="shelf-view active">
+        <div id="books-grid" class="books-grid"></div>
+      </section>
+
+      <!-- 2) RYGG CAROUSEL VIEW -->
+      <section id="spine-view-container" class="shelf-view">
+        <div class="carousel-wrapper">
+          <button type="button" class="btn btn-icon carousel-nav-btn" id="carousel-prev" title="Forrige bok">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+              <path d="M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z"></path>
+            </svg>
+          </button>
+
+          <div class="spine-stage" id="spine-stage">
+            <div class="spine-track" id="spine-track"></div>
+            <div class="bookshelf-ledge" aria-hidden="true"></div>
+          </div>
+
+          <button type="button" class="btn btn-icon carousel-nav-btn" id="carousel-next" title="Neste bok">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+              <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Active Carousel Book Details Bar: Text on Open button, Icon-only on Bookmarks button, plus Size Variable control -->
+        <div class="carousel-footer" id="carousel-footer">
+          <div class="carousel-book-title" id="carousel-book-title">—</div>
+          <div class="carousel-book-meta" id="carousel-book-meta"></div>
+          <div class="carousel-actions">
+            <button type="button" class="btn btn-primary" id="carousel-open-btn">Åpne bok</button>
+            <button type="button" class="btn btn-icon" id="carousel-bookmarks-btn" title="Kapitler og bokmerker">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+                <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"></path>
+              </svg>
+            </button>
+            <div class="size-scale-control" title="Bokstørrelse i hylla (lagres for boka)">
+              <button type="button" class="btn btn-icon btn-sm" id="btn-scale-down" title="Mindre bok i hylla">−</button>
+              <span class="size-scale-label" id="carousel-scale-label">100%</span>
+              <button type="button" class="btn btn-icon btn-sm" id="btn-scale-up" title="Større bok i hylla">+</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="empty-state hidden">
+        <div class="empty-box">
+          <h3>Ingen bøker funnet</h3>
+          <p id="empty-state-desc">Legg bokmapper med <code>c1.jpg</code> (Forsats), <code>c2.jpg</code> (Rygg), <code>c3.jpg</code> (Baksats) og <code>0001.jpg</code>... i bokmappen.</p>
+          <button type="button" class="btn btn-primary" id="btn-empty-settings">Velg bokmappe</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ======================== 2) READER VIEW (PLAYER) ======================== -->
+  <div id="reader-screen" class="screen">
+    <!-- Clean Minimalist Reader Top Bar -->
+    <header class="reader-topbar" id="reader-topbar">
+      <!-- Left: Back icon + Book-with-bookmark icon (Chapters & Bookmarks) -->
+      <div class="reader-topbar-left">
+        <button type="button" class="btn btn-icon" id="btn-back-shelf" title="Tilbake til bokhyllen (Esc)">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M7.78 12.53a.75.75 0 0 1-1.06 0L2.47 8.28a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L4.81 7h7.44a.75.75 0 0 1 0 1.5H4.81l2.97 2.97a.75.75 0 0 1 0 1.06Z"></path>
+          </svg>
+        </button>
+
+        <button type="button" class="btn btn-icon" id="btn-bookmarks-drawer" title="Kapitler og bokmerker (Tast M)">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Center: Book Title + Clickable Calm Grey Chapter Pill -->
+      <div class="reader-topbar-center">
+        <span class="reader-book-title" id="reader-book-title">Bok</span>
+        <button type="button" class="chapter-pill hidden" id="reader-chapter-badge" title="Klikk for å åpne kapittelmenyen"></button>
+      </div>
+
+      <!-- Right: Zoom Reset + Bookmark Icon + Export Icon + Cogwheel Settings Icon + Fullscreen Icon -->
+      <div class="reader-topbar-right">
+        <button type="button" class="btn btn-sm hidden" id="btn-zoom-reset" title="Nullstill zoom (Tast 0)">
+          100%
+        </button>
+
+        <button type="button" class="btn btn-icon" id="btn-bookmark-toggle" title="Sett eller fjern bokmerke på denne siden (Tast B)">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 0 1-1.227.579L8 11.722l-3.773 3.107A.751.751 0 0 1 3 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.91l3.023-2.489a.75.75 0 0 1 .954 0l3.023 2.49V2.75a.25.25 0 0 0-.25-.25Z"></path>
+          </svg>
+        </button>
+
+        <!-- Export Pages Icon Button -->
+        <button type="button" class="btn btn-icon" id="btn-open-export" title="Eksporter sider (PDF / ZIP)">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Z"></path>
+            <path d="M7.25 7.689V2a.75.75 0 0 1 1.5 0v5.689l1.97-1.969a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L4.22 6.78a.749.749 0 1 1 1.06-1.06l1.97 1.969Z"></path>
+          </svg>
+        </button>
+
+        <!-- View Settings Popover Trigger (Cogwheel / Tannhjul) -->
+        <div class="popover-anchor">
+          <button type="button" class="btn btn-icon" id="btn-view-options" title="Visningsinnstillinger">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+              <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.973 7.973 0 0 1-.704 1.218c-.428.609-1.176.806-1.82.63l-1.103-.303c-.066-.019-.176-.011-.299.071a5.903 5.903 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.645-.716 1.195-1.459 1.26a8.094 8.094 0 0 1-1.402 0c-.743-.065-1.289-.615-1.459-1.26l-.288-1.107c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.364-1.891l.814-.806c.049-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.814-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.218c.428-.609 1.176-.806 1.82-.63l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.009.645 6.556.095 7.299.03 7.532.01 7.766 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.03.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"></path>
+            </svg>
+          </button>
+
+          <!-- Compact View Settings Popover -->
+          <div class="view-popover hidden" id="view-options-popover">
+            <div class="popover-section">
+              <span class="popover-label">Sidevisning</span>
+              <div class="segmented-control full-width" role="group">
+                <button type="button" class="seg-btn" data-reader-mode="single">1 side</button>
+                <button type="button" class="seg-btn" data-reader-mode="spread">2 sider</button>
+                <button type="button" class="seg-btn" data-reader-mode="vertical">Scroll</button>
+              </div>
+            </div>
+
+            <div class="popover-section" id="popover-spread-section">
+              <div class="popover-row">
+                <span class="popover-label">Forsats alene i oppslag</span>
+                <button type="button" class="btn btn-sm" id="btn-spread-offset">På</button>
+              </div>
+              <span class="popover-hint">Lagres for denne boka</span>
+            </div>
+
+            <div class="popover-section">
+              <div class="popover-row">
+                <span class="popover-label">Størrelse i bokhylla</span>
+                <div class="size-scale-control">
+                  <button type="button" class="btn btn-icon btn-sm" id="btn-reader-scale-down">−</button>
+                  <span class="size-scale-label" id="reader-scale-label">100%</span>
+                  <button type="button" class="btn btn-icon btn-sm" id="btn-reader-scale-up">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button type="button" class="btn btn-icon hide-xs" id="btn-fullscreen" title="Fullskjerm (Tast F)">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+            <path d="M1.75 10a.75.75 0 0 1 .75.75v2.5c0 .138.112.25.25.25h2.5a.75.75 0 0 1 0 1.5h-2.5A1.75 1.75 0 0 1 1 13.25v-2.5a.75.75 0 0 1 .75-.75Zm12.5 0a.75.75 0 0 1 .75.75v2.5A1.75 1.75 0 0 1 13.25 15h-2.5a.75.75 0 0 1 0-1.5h2.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 .75-.75ZM2.75 2.5a.25.25 0 0 0-.25.25v2.5a.75.75 0 0 1-1.5 0v-2.5C1 1.784 1.784 1 2.75 1h2.5a.75.75 0 0 1 0 1.5h-2.5Zm8 0a.75.75 0 0 1 0-1.5h2.5c.966 0 1.75.784 1.75 1.75v2.5a.75.75 0 0 1-1.5 0v-2.5a.25.25 0 0 0-.25-.25h-2.5Z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Reader Viewport: Flex layout where Left Drawer pushes/shrinks the book stage instead of covering it -->
+    <div class="reader-viewport" id="reader-viewport">
+      <!-- LEFT Side Drawer: Tabs for Chapters (shared) & Bookmarks (personal) -->
+      <aside class="bookmarks-drawer is-closed" id="bookmarks-drawer">
+        <div class="drawer-inner">
+          <div class="drawer-header">
+            <div class="drawer-tabs">
+              <button type="button" class="drawer-tab active" data-drawer-tab="chapters" id="tab-btn-chapters">
+                Kapitler
+              </button>
+              <button type="button" class="drawer-tab" data-drawer-tab="bookmarks" id="tab-btn-bookmarks">
+                Bokmerker
+              </button>
+            </div>
+            <button type="button" class="btn btn-icon btn-sm" id="btn-close-drawer" title="Lukk">✕</button>
+          </div>
+
+          <!-- TAB 1: SHARED CHAPTERS (Saved in book.json for everyone) -->
+          <div class="drawer-pane active" id="drawer-pane-chapters">
+            <div class="drawer-add-form">
+              <input type="text" id="chapter-title-input" placeholder="Nytt kapittel på denne siden..." maxlength="120" />
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-chapter">Lagre</button>
+            </div>
+            <div class="drawer-subnote">
+              Felles for alle profiler
+            </div>
+            <div class="bookmarks-list" id="chapters-list"></div>
+          </div>
+
+          <!-- TAB 2: PERSONAL BOOKMARKS (Saved only on active profile) -->
+          <div class="drawer-pane" id="drawer-pane-bookmarks">
+            <div class="drawer-add-form">
+              <input type="text" id="bookmark-note-input" placeholder="Notat på denne siden..." maxlength="120" />
+              <button type="button" class="btn btn-primary btn-sm" id="btn-save-bookmark-note">Lagre</button>
+            </div>
+            <div class="drawer-subnote" id="personal-bookmark-subnote">
+              Kun synlig på din profil
+            </div>
+            <div class="bookmarks-list" id="bookmarks-list"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Paged Mode Stage (Single or 2-Page Spread) -->
+      <div class="reader-stage" id="reader-stage">
+        <button type="button" class="stage-nav-zone left" id="zone-prev" aria-label="Forrige side" title="Forrige side"></button>
+        <div class="zoom-pan-layer" id="zoom-pan-layer">
+          <div class="spread-container" id="spread-container"></div>
+        </div>
+        <button type="button" class="stage-nav-zone right" id="zone-next" aria-label="Neste side" title="Neste side"></button>
+      </div>
+
+      <!-- Vertical Scroll Stage -->
+      <div class="reader-vertical hidden" id="reader-vertical"></div>
+    </div>
+
+    <!-- Reader Bottom Scrubber Bar (Material 3 Expressive segmented cut-through ticks) -->
+    <footer class="reader-bottombar" id="reader-bottombar">
+      <button type="button" class="btn btn-icon btn-sm" id="btn-prev-page" title="Forrige side (Venstre pil)">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+          <path d="M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z"></path>
+        </svg>
+      </button>
+
+      <div class="scrubber-wrap">
+        <div class="scrubber-track-Wrap" id="scrubber-track-wrap">
+          <div class="scrubber-visual-track">
+            <div class="scrubber-visual-fill" id="scrubber-visual-fill"></div>
+          </div>
+          <div class="scrubber-bookmarks" id="scrubber-bookmarks"></div>
+          <input type="range" id="page-scrubber" min="0" max="1" value="0" step="1" />
+        </div>
+      </div>
+
+      <span class="scrubber-page-info" id="scrubber-current-label">1 / 1</span>
+
+      <button type="button" class="btn btn-icon btn-sm" id="btn-next-page" title="Neste side (Høyre pil)">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">
+          <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path>
+        </svg>
+      </button>
+    </footer>
+  </div>
+
+  <!-- ======================== EXPORT PAGES MODAL ======================== -->
+  <div class="modal-backdrop hidden" id="export-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Eksporter sider</h3>
+        <button type="button" class="btn btn-icon btn-sm" id="btn-close-export">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-range-row">
+          <div class="form-group" style="flex:1">
+            <label for="export-from-input">Startside</label>
+            <input type="number" id="export-from-input" class="text-input" min="1" value="1" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label for="export-to-input">Stoppside</label>
+            <input type="number" id="export-to-input" class="text-input" min="1" value="1" />
+          </div>
+        </div>
+
+        <div class="export-presets">
+          <button type="button" class="btn btn-sm" id="btn-preset-current">Nåværende side(r)</button>
+          <button type="button" class="btn btn-sm hidden" id="btn-preset-chapter">Dette kapittelet</button>
+          <button type="button" class="btn btn-sm" id="btn-preset-all">Hele boka</button>
+        </div>
+
+        <p class="form-help" id="export-summary-text">Eksporterer 1 side</p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn" id="btn-export-zip">Last ned ZIP (JPG)</button>
+          <button type="button" class="btn btn-primary" id="btn-export-pdf">Last ned PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== CREATE / EDIT PROFILE MODAL ======================== -->
+  <div class="modal-backdrop hidden" id="profile-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="profile-modal-title">Ny profil</h3>
+        <button type="button" class="btn btn-icon btn-sm" id="btn-close-profile-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-editor-layout">
+          <div class="avatar-preview-col">
+            <div class="avatar-preview-box" id="avatar-preview-box">
+              <span id="avatar-preview-initials">NY</span>
+              <img id="avatar-preview-img" class="hidden" alt="Profilbilde" />
+            </div>
+            <label class="btn btn-sm avatar-upload-label">
+              Last opp bilde
+              <input type="file" id="input-profile-avatar" accept="image/*" class="hidden" />
+            </label>
+            <button type="button" class="btn btn-sm hidden" id="btn-clear-avatar">Fjern bilde</button>
+          </div>
+
+          <div class="profile-fields-col">
+            <div class="form-group">
+              <label for="input-profile-name">Navn</label>
+              <input type="text" id="input-profile-name" class="text-input" placeholder="F.eks. Ola, Kari..." maxlength="36" />
+            </div>
+
+            <div class="form-group">
+              <label>Farge (hvis uten bilde)</label>
+              <div class="color-swatches" id="profile-color-swatches">
+                <button type="button" class="color-swatch active" data-color="#00A3FF" style="background:#00A3FF"></button>
+                <button type="button" class="color-swatch" data-color="#3fb950" style="background:#3fb950"></button>
+                <button type="button" class="color-swatch" data-color="#d29922" style="background:#d29922"></button>
+                <button type="button" class="color-swatch" data-color="#f85149" style="background:#f85149"></button>
+                <button type="button" class="color-swatch" data-color="#a371f7" style="background:#a371f7"></button>
+                <button type="button" class="color-swatch" data-color="#8b949e" style="background:#8b949e"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn hidden" id="btn-delete-profile" style="color:#f85149;">Slett profil</button>
+          <div style="flex:1"></div>
+          <button type="button" class="btn" id="btn-cancel-profile">Avbryt</button>
+          <button type="button" class="btn btn-primary" id="btn-save-profile">Lagre profil</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== SETTINGS & SERVER MODAL ======================== -->
+  <div class="modal-backdrop hidden" id="settings-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Innstillinger & Server</h3>
+        <button type="button" class="btn btn-icon btn-sm" id="btn-close-settings">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="input-books-dir">Bokmappe på serveren (1 undermappe pr. bok)</label>
+          <div class="input-row">
+            <input type="text" id="input-books-dir" placeholder="C:\Bøker" />
+            <button type="button" class="btn btn-primary" id="btn-save-books-dir">Lagre mappe</button>
+          </div>
+          <p class="form-help">
+            Hver bokmappe kan inneholde Forsats (c1), Rygg (c2), Baksats (c3) og 0001.jpg oppover.
+          </p>
+          <p class="form-status hidden" id="books-dir-status"></p>
+        </div>
+
+        <div class="form-group">
+          <label>Legg til offisiell e-bok (.epub eller .pdf)</label>
+          <div class="input-row">
+            <label class="btn btn-primary" style="cursor:pointer; flex:1">
+              Last opp .epub / .pdf fil
+              <input type="file" id="input-upload-ebook" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple class="hidden" />
+            </label>
+          </div>
+          <p class="form-help">
+            Du kan enten laste opp her eller legge <code>.epub</code> og <code>.pdf</code> filer direkte i bokmappen.
+          </p>
+          <p class="form-status hidden" id="ebook-upload-status"></p>
+        </div>
+
+        <div class="form-group">
+          <label>Mobil / Lokalt nettverk (LAN)</label>
+          <div class="info-panel" id="lan-urls-list">
+            Laster nettverksadresser...
+          </div>
+          <p class="form-help">Åpne en av adressene over i nettleseren på mobilen eller del med venner på nettverket.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/vendor/pdf.min.js"></script>
+  <script src="/app.js?v=7"></script>
+</body>
+</html>

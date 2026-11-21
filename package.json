@@ -1,0 +1,17 @@
+{
+  "name": "bokami",
+  "version": "1.0.0",
+  "description": "Rask, minimalistisk bokleser og digital bokhylle for bildeserier, PDF og EPUB",
+  "main": "server.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/t0m0t0w/bokami.git"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
