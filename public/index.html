@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0d1014" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=8" />
+  <meta name="theme-color" content="#0c0d10" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=10" />
   <title>Bokami</title>
-  <link rel="stylesheet" href="/styles.css?v=9" />
+  <link rel="stylesheet" href="/styles.css?v=11" />
 </head>
 <body>
   <!-- ======================== AMBIENT HEAVILY-TINTED RANDOM PAGE BACKDROP ======================== -->
@@ -421,19 +421,19 @@
             <div class="form-group">
               <label>Farge (hvis uten bilde)</label>
               <div class="color-swatches" id="profile-color-swatches">
-                <button type="button" class="color-swatch active" data-color="#00A3FF" style="background:#00A3FF"></button>
-                <button type="button" class="color-swatch" data-color="#3fb950" style="background:#3fb950"></button>
-                <button type="button" class="color-swatch" data-color="#d29922" style="background:#d29922"></button>
-                <button type="button" class="color-swatch" data-color="#f85149" style="background:#f85149"></button>
-                <button type="button" class="color-swatch" data-color="#a371f7" style="background:#a371f7"></button>
-                <button type="button" class="color-swatch" data-color="#8b949e" style="background:#8b949e"></button>
+                <button type="button" class="color-swatch active" data-color="#4c8df6" style="background:#4c8df6" aria-label="Blå"></button>
+                <button type="button" class="color-swatch" data-color="#45b87f" style="background:#45b87f" aria-label="Grønn"></button>
+                <button type="button" class="color-swatch" data-color="#e0a94c" style="background:#e0a94c" aria-label="Varm gul"></button>
+                <button type="button" class="color-swatch" data-color="#e56b6f" style="background:#e56b6f" aria-label="Korall"></button>
+                <button type="button" class="color-swatch" data-color="#9b7df2" style="background:#9b7df2" aria-label="Lavendel"></button>
+                <button type="button" class="color-swatch" data-color="#8b92a1" style="background:#8b92a1" aria-label="Grå"></button>
               </div>
             </div>
           </div>
         </div>
 
         <div class="modal-actions">
-          <button type="button" class="btn hidden" id="btn-delete-profile" style="color:#f85149;">Slett profil</button>
+          <button type="button" class="btn btn-danger hidden" id="btn-delete-profile">Slett profil</button>
           <div style="flex:1"></div>
           <button type="button" class="btn" id="btn-cancel-profile">Avbryt</button>
           <button type="button" class="btn btn-primary" id="btn-save-profile">Lagre profil</button>
@@ -467,103 +467,147 @@
 
   <!-- ======================== SETTINGS & ADMIN MODAL ======================== -->
   <div class="modal-backdrop hidden" id="settings-modal">
-    <div class="modal modal-wide">
-      <div class="modal-header">
-        <h3>Innstillinger & Admin</h3>
-        <button type="button" class="btn btn-icon btn-sm" id="btn-close-settings">✕</button>
-      </div>
+    <div class="modal modal-wide modal-settings">
+      <button type="button" class="btn btn-icon btn-sm settings-close-btn" id="btn-close-settings" title="Lukk" aria-label="Lukk innstillinger">✕</button>
 
       <!-- Non-admin view -->
-      <div class="modal-body hidden" id="settings-user-view">
-        <p class="form-help">
-          Serverinnstillinger, bokopplasting, endring av boknavn og brukerrettigheter krever admin-tilgang.
-        </p>
-        <div class="modal-actions" style="border-top:none; padding-top:0;">
-          <button type="button" class="btn btn-primary" id="btn-settings-admin-unlock">Logg inn som admin</button>
-          <div style="flex:1"></div>
-          <button type="button" class="btn" id="btn-settings-user-logout">Logg ut</button>
+      <div class="modal-body settings-user-view hidden" id="settings-user-view">
+        <div class="settings-pane-header">
+          <h3>Innstillinger</h3>
+          <p class="form-help">
+            Serverinnstillinger, bokopplasting, endring av boknavn og brukerrettigheter krever admin-tilgang.
+          </p>
+        </div>
+        <div class="settings-card">
+          <div class="settings-card-row">
+            <div class="settings-row-text">
+              <span class="settings-row-title">Administrator-tilgang</span>
+              <span class="settings-row-desc">Lås opp for å laste opp bøker og styre profiler.</span>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-settings-admin-unlock">Logg inn som admin</button>
+          </div>
+          <div class="settings-card-row">
+            <div class="settings-row-text">
+              <span class="settings-row-title">Økt</span>
+              <span class="settings-row-desc">Logg ut fra denne enheten.</span>
+            </div>
+            <button type="button" class="btn" id="btn-settings-user-logout">Logg ut</button>
+          </div>
         </div>
       </div>
 
-      <!-- Admin view -->
-      <div class="modal-body hidden" id="settings-admin-view">
-        <div class="admin-tabs" role="tablist">
-          <button type="button" class="admin-tab active" data-admin-tab="books">Bøker</button>
-          <button type="button" class="admin-tab" data-admin-tab="users">Brukere & tilgang</button>
-          <button type="button" class="admin-tab" data-admin-tab="security">Sikkerhet & server</button>
-        </div>
-
-        <!-- TAB 1: BOOKS -->
-        <div class="admin-pane active" id="admin-pane-books">
-          <div class="form-group">
-            <label>Last opp bok (.epub, .pdf eller .zip med bilder)</label>
-            <div class="input-row">
-              <label class="btn btn-primary" style="cursor:pointer; flex:1">
-                Last opp .epub / .pdf / .zip
-                <input type="file" id="input-upload-ebook" accept=".epub,.pdf,.zip,application/epub+zip,application/pdf,application/zip,application/x-zip-compressed" multiple class="hidden" />
-              </label>
-            </div>
-            <p class="form-help">
-              For bildebøker: pakk bildene (<code>c1.jpg</code>, <code>c2.jpg</code>, <code>0001.jpg</code>...) i en <code>.zip</code>-fil (maks 250 MB).
-            </p>
-            <p class="form-status hidden" id="ebook-upload-status"></p>
-          </div>
-
-          <div class="form-group">
-            <label>Bøker i biblioteket (endre visningsnavn & synlighet)</label>
-            <div class="admin-list" id="admin-books-list"></div>
-          </div>
-        </div>
-
-        <!-- TAB 2: USERS & ACCESS -->
-        <div class="admin-pane" id="admin-pane-users">
-          <p class="form-help">
-            Administrer hvilke profiler som har admin-tilgang, personlig admin-passord og hvilke bøker som er skjult per profil.
-          </p>
-          <div class="admin-list" id="admin-users-list"></div>
-        </div>
-
-        <!-- TAB 3: SECURITY & SERVER -->
-        <div class="admin-pane" id="admin-pane-security">
-          <div class="form-group">
-            <label for="input-new-reader-password">Nytt leserpassord (for vanlige brukere)</label>
-            <input type="password" id="input-new-reader-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
-            <p class="form-help hidden" id="reader-pwd-env-note">Styres av miljøvariabelen BOKAMI_PASSWORD og kan ikke endres her.</p>
-          </div>
-
-          <div class="form-group">
-            <label for="input-new-global-admin-password">Nytt globalt admin-passord</label>
-            <input type="password" id="input-new-global-admin-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
-            <p class="form-help hidden" id="admin-pwd-env-note">Styres av miljøvariabelen BOKAMI_ADMIN_PASSWORD og kan ikke endres her.</p>
-          </div>
-
-          <div class="input-row">
-            <button type="button" class="btn btn-primary" id="btn-save-admin-passwords">Lagre passord</button>
-          </div>
-          <p class="form-status hidden" id="admin-passwords-status"></p>
-
-          <div class="form-group">
-            <label>Mobil / Lokalt nettverk (LAN)</label>
-            <div class="info-panel" id="lan-urls-list">
-              Laster nettverksadresser...
+      <!-- Admin view (Antigravity 2-column sidebar layout) -->
+      <div class="settings-layout hidden" id="settings-admin-view">
+        <nav class="settings-sidebar" aria-label="Innstillinger">
+          <div class="settings-sidebar-group">
+            <span class="settings-sidebar-label">Innstillinger</span>
+            <div class="admin-tabs" role="tablist">
+              <button type="button" class="admin-tab active" data-admin-tab="books">Bøker</button>
+              <button type="button" class="admin-tab" data-admin-tab="users">Brukere & tilgang</button>
+              <button type="button" class="admin-tab" data-admin-tab="security">Sikkerhet & server</button>
             </div>
           </div>
 
-          <div class="form-group">
-            <label>Server & oppdatering</label>
-            <p class="form-help">
-              Restarter serveren så Kubernetes kan hente siste Docker-image fra GitHub. Unngå å trykke flere ganger på rad.
-            </p>
-            <div class="input-row">
-              <button type="button" class="btn" id="btn-admin-restart">Restart server</button>
+          <div class="settings-sidebar-footer">
+            <button type="button" class="settings-sidebar-action" id="btn-admin-lock">Lås admin-modus</button>
+            <button type="button" class="settings-sidebar-action is-danger" id="btn-settings-admin-logout">Logg ut</button>
+          </div>
+        </nav>
+
+        <div class="settings-content">
+          <!-- TAB 1: BOOKS -->
+          <div class="admin-pane active" id="admin-pane-books">
+            <div class="settings-pane-header">
+              <h3>Bøker</h3>
+              <p class="form-help">Last opp nye bøker, endre visningsnavn og styr synlighet i biblioteket.</p>
             </div>
-            <p class="form-status hidden" id="admin-restart-status"></p>
+
+            <div class="settings-section">
+              <span class="settings-section-title">Last opp bok</span>
+              <div class="settings-card">
+                <div class="settings-card-block">
+                  <div class="input-row">
+                    <label class="btn btn-primary" style="cursor:pointer; flex:1">
+                      Last opp .epub / .pdf / .zip
+                      <input type="file" id="input-upload-ebook" accept=".epub,.pdf,.zip,application/epub+zip,application/pdf,application/zip,application/x-zip-compressed" multiple class="hidden" />
+                    </label>
+                  </div>
+                  <p class="form-help">
+                    For bildebøker: pakk bildene (<code>c1.jpg</code>, <code>c2.jpg</code>, <code>0001.jpg</code>...) i en <code>.zip</code>-fil (maks 250 MB).
+                  </p>
+                  <p class="form-status hidden" id="ebook-upload-status"></p>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <span class="settings-section-title">Bibliotek</span>
+              <div class="admin-list" id="admin-books-list"></div>
+            </div>
           </div>
 
-          <div class="modal-actions">
-            <button type="button" class="btn" id="btn-admin-lock">Lås admin-modus</button>
-            <div style="flex:1"></div>
-            <button type="button" class="btn" id="btn-settings-admin-logout" style="color:#f85149;">Logg ut</button>
+          <!-- TAB 2: USERS & ACCESS -->
+          <div class="admin-pane" id="admin-pane-users">
+            <div class="settings-pane-header">
+              <h3>Brukere & tilgang</h3>
+              <p class="form-help">
+                Administrer hvilke profiler som har admin-tilgang, personlig admin-passord og hvilke bøker som er skjult per profil.
+              </p>
+            </div>
+            <div class="admin-list" id="admin-users-list"></div>
+          </div>
+
+          <!-- TAB 3: SECURITY & SERVER -->
+          <div class="admin-pane" id="admin-pane-security">
+            <div class="settings-pane-header">
+              <h3>Sikkerhet & server</h3>
+              <p class="form-help">Administrer passord, nettverkstilgang og serveroppdatering.</p>
+            </div>
+
+            <div class="settings-section">
+              <span class="settings-section-title">Passord</span>
+              <div class="settings-card">
+                <div class="settings-card-block">
+                  <div class="form-group">
+                    <label for="input-new-reader-password">Nytt leserpassord (for vanlige brukere)</label>
+                    <input type="password" id="input-new-reader-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
+                    <p class="form-help hidden" id="reader-pwd-env-note">Styres av miljøvariabelen BOKAMI_PASSWORD og kan ikke endres her.</p>
+                  </div>
+                </div>
+                <div class="settings-card-block">
+                  <div class="form-group">
+                    <label for="input-new-global-admin-password">Nytt globalt admin-passord</label>
+                    <input type="password" id="input-new-global-admin-password" class="text-input" placeholder="La stå tomt for å beholde" autocomplete="new-password" />
+                    <p class="form-help hidden" id="admin-pwd-env-note">Styres av miljøvariabelen BOKAMI_ADMIN_PASSWORD og kan ikke endres her.</p>
+                  </div>
+                </div>
+                <div class="settings-card-row">
+                  <p class="form-status hidden" id="admin-passwords-status" style="flex:1"></p>
+                  <button type="button" class="btn btn-primary" id="btn-save-admin-passwords">Lagre passord</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <span class="settings-section-title">Mobil / Lokalt nettverk (LAN)</span>
+              <div class="info-panel" id="lan-urls-list">
+                Laster nettverksadresser...
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <span class="settings-section-title">Server & oppdatering</span>
+              <div class="settings-card">
+                <div class="settings-card-row">
+                  <div class="settings-row-text">
+                    <span class="settings-row-title">Restart server</span>
+                    <span class="settings-row-desc">Restarter serveren så Kubernetes kan hente siste Docker-image fra GitHub. Unngå å trykke flere ganger på rad.</span>
+                  </div>
+                  <button type="button" class="btn" id="btn-admin-restart">Restart</button>
+                </div>
+                <p class="form-status hidden" id="admin-restart-status" style="margin: 0 16px 14px;"></p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -571,6 +615,6 @@
   </div>
 
   <script type="module" src="/vendor/pdf-loader.mjs?v=8"></script>
-  <script defer src="/app.js?v=8"></script>
+  <script defer src="/app.js?v=10"></script>
 </body>
 </html>

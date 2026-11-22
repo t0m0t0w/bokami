@@ -22,7 +22,7 @@
     manageProfilesMode: false,
     editingProfileId: null,
     draftProfileAvatar: '',
-    draftProfileColor: '#00A3FF',
+    draftProfileColor: '#4c8df6',
     pendingAdminAction: null,
 
     // Library
@@ -247,7 +247,7 @@
   }
 
   function safeHexColor(val) {
-    return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val) ? val : '#00A3FF';
+    return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val) ? val : '#4c8df6';
   }
 
   function isSafeExternalHref(val) {
@@ -812,7 +812,7 @@
   function openProfileModal(profile = null) {
     state.editingProfileId = profile ? profile.id : null;
     state.draftProfileAvatar = profile && isSafeAvatarUrl(profile.avatar) ? profile.avatar : '';
-    state.draftProfileColor = profile ? safeHexColor(profile.color) : '#00A3FF';
+    state.draftProfileColor = profile ? safeHexColor(profile.color) : '#4c8df6';
 
     el.profileModalTitle.textContent = profile ? `Rediger ${profile.name}` : 'Ny profil';
     el.inputProfileName.value = profile ? profile.name : '';
