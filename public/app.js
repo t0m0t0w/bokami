@@ -697,18 +697,30 @@
       }
 
       if (prof.isAdmin) {
-        const adminBadge = document.createElement('span');
-        adminBadge.className = 'profile-admin-badge';
-        adminBadge.textContent = 'Admin';
-        tile.appendChild(adminBadge);
+        const isLocked = !state.isAdmin;
+        const lockBadge = document.createElement('span');
+        lockBadge.className = isLocked ? 'profile-lock-badge' : 'profile-lock-badge is-unlocked';
+        lockBadge.title = isLocked ? 'Admin (låst – krever passord)' : 'Admin (opplåst)';
+        lockBadge.setAttribute('aria-label', lockBadge.title);
 
-        if (!state.isAdmin) {
-          const lockBadge = document.createElement('span');
-          lockBadge.className = 'profile-lock-badge';
-          lockBadge.textContent = '🔒';
-          lockBadge.title = 'Krever admin-passord';
-          tile.appendChild(lockBadge);
-        }
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.setAttribute('width', '13');
+        svg.setAttribute('height', '13');
+        svg.setAttribute('fill', 'currentColor');
+        svg.setAttribute('aria-hidden', 'true');
+
+        const path = document.createElementNS(svgNS, 'path');
+        path.setAttribute(
+          'd',
+          isLocked
+            ? 'M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z'
+            : 'M5.5 4v2h7A1.75 1.75 0 0 1 14.25 7.75v5.5A1.75 1.75 0 0 1 12.5 15h-9a1.75 1.75 0 0 1-1.75-1.75v-5.5C1.75 6.784 2.534 6 3.5 6H4V4a4 4 0 0 1 7.371-2.154.75.75 0 0 1-1.264.808A2.5 2.5 0 0 0 5.5 4Zm-2.25 3.75v5.5c0 .138.112.25.25.25h9a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25h-9a.25.25 0 0 0-.25.25Z'
+        );
+        svg.appendChild(path);
+        lockBadge.appendChild(svg);
+        tile.appendChild(lockBadge);
       }
 
       const editOverlay = document.createElement('div');

@@ -462,33 +462,27 @@ html, body {
   padding: 0 16px;
 }
 
-.profile-admin-badge {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-  padding: 2px 8px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  background-color: rgba(12, 13, 16, 0.85);
-  color: var(--accent-fg);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-pill);
-  z-index: 2;
-}
-
 .profile-lock-badge {
   position: absolute;
   top: 9px;
-  left: 9px;
-  padding: 2px 7px;
-  font-size: 11px;
-  background-color: rgba(12, 13, 16, 0.85);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-pill);
+  right: 9px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(19, 20, 24, 0.84);
+  backdrop-filter: blur(8px);
+  color: var(--text-primary);
+  border: 1px solid var(--border-btn);
+  box-shadow: var(--btn-highlight), 0 4px 12px rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
   z-index: 2;
+}
+
+.profile-lock-badge.is-unlocked {
+  color: var(--accent-fg);
+  border-color: var(--accent-border);
 }
 
 /* Profile editor modal */
@@ -2623,17 +2617,15 @@ code, kbd {
     font-size: 11px;
     margin-top: -4px;
   }
-  .profile-admin-badge {
-    top: 4px;
-    right: 4px;
-    font-size: 9px;
-    padding: 1px 5px;
-  }
   .profile-lock-badge {
-    top: 4px;
-    left: 4px;
-    font-size: 10px;
-    padding: 1px 5px;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+  }
+  .profile-lock-badge svg {
+    width: 11px;
+    height: 11px;
   }
   .carousel-wrapper {
     gap: 6px;
