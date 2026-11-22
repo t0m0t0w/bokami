@@ -234,6 +234,8 @@
     btnSaveAdminPasswords: document.getElementById('btn-save-admin-passwords'),
     adminPasswordsStatus: document.getElementById('admin-passwords-status'),
     lanUrlsList: document.getElementById('lan-urls-list'),
+    btnAdminRestart: document.getElementById('btn-admin-restart'),
+    adminRestartStatus: document.getElementById('admin-restart-status'),
     btnAdminLock: document.getElementById('btn-admin-lock'),
     btnSettingsAdminLogout: document.getElementById('btn-settings-admin-logout')
   };
@@ -2631,6 +2633,48 @@
     }
   }
 
+  async function restartServer() {
+    if (
+      !window.confirm(
+        'Restarte Bokami-serveren nå? Hvis et nytt image er klart på GHCR, vil det bli hentet ved oppstart.'
+      )
+    ) {
+      return;
+    }
+
+    el.btnAdminRestart.disabled = true;
+    el.adminRestartStatus.textContent = 'Restarter server... Siden lastes inn på nytt automatisk.';
+    el.adminRestartStatus.style.color = 'var(--text-secondary)';
+    el.adminRestartStatus.classList.remove('hidden');
+
+    try {
+      await apiPost('/api/admin/restart', {});
+    } catch (err) {
+      el.btnAdminRestart.disabled = false;
+      el.adminRestartStatus.textContent = `Feil: ${err.message}`;
+      el.adminRestartStatus.style.color = '#f85149';
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        const res = await fetch('/healthz', { cache: 'no-store' });
+        if (res.ok) {
+          window.location.reload();
+          return;
+        }
+      } catch {
+        // Server is still restarting
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    el.btnAdminRestart.disabled = false;
+    el.adminRestartStatus.textContent =
+      'Serveren bruker litt tid på å komme opp igjen. Last inn siden på nytt om noen sekunder.';
+  }
+
   // ======================== EVENT LISTENERS ========================
   el.btnPasswordSubmit.addEventListener('click', submitPassword);
   el.passwordInput.addEventListener('keydown', (e) => {
@@ -2846,6 +2890,7 @@
   el.btnSettingsAdminLogout.addEventListener('click', logoutSession);
   el.btnAdminLock.addEventListener('click', lockAdminMode);
   el.btnSaveAdminPasswords.addEventListener('click', saveAdminPasswords);
+  el.btnAdminRestart.addEventListener('click', restartServer);
 
   document.querySelectorAll('[data-admin-tab]').forEach((btn) => {
     btn.addEventListener('click', () => switchAdminTab(btn.dataset.adminTab));

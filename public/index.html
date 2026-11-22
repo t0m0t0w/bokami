@@ -549,6 +549,17 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label>Server & oppdatering</label>
+            <p class="form-help">
+              Restarter serveren så Kubernetes kan hente siste Docker-image fra GitHub. Unngå å trykke flere ganger på rad.
+            </p>
+            <div class="input-row">
+              <button type="button" class="btn" id="btn-admin-restart">Restart server</button>
+            </div>
+            <p class="form-status hidden" id="admin-restart-status"></p>
+          </div>
+
           <div class="modal-actions">
             <button type="button" class="btn" id="btn-admin-lock">Lås admin-modus</button>
             <div style="flex:1"></div>

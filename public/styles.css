@@ -1029,7 +1029,6 @@ html, body {
   z-index: 2;
   writing-mode: vertical-rl;
   text-orientation: mixed;
-  transform: rotate(180deg);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.4px;

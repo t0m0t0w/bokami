@@ -2773,6 +2773,14 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
 
+      if (pathname === '/api/admin/restart' && req.method === 'POST') {
+        sendJson(res, 200, { ok: true });
+        setTimeout(() => {
+          gracefulShutdown('ADMIN_RESTART');
+        }, 150).unref();
+        return;
+      }
+
       return sendJson(res, 404, { error: 'Ukjent admin-endepunkt' });
     }
 
