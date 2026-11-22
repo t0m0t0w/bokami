@@ -109,13 +109,17 @@ html, body {
 /* ======================== 0A) PASSWORD SCREEN ======================== */
 #password-screen {
   align-items: center;
-  justify-content: center;
-  padding: 24px;
+  justify-content: flex-start;
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .password-box {
   width: 100%;
   max-width: 340px;
+  margin: auto 0;
+  flex-shrink: 0;
   padding: 28px 24px;
   background-color: var(--bg-surface);
   border: var(--border-w) solid var(--border-default);
@@ -170,9 +174,11 @@ html, body {
 /* ======================== 0B) PROFILE SELECTOR (Larger Netflix-style) ======================== */
 #profile-screen {
   align-items: center;
-  justify-content: center;
-  padding: 28px;
+  justify-content: flex-start;
+  padding: max(28px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-right, 0px)) max(32px, env(safe-area-inset-bottom, 0px)) max(24px, env(safe-area-inset-left, 0px));
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .profile-screen-inner {
@@ -181,6 +187,8 @@ html, body {
   align-items: center;
   max-width: 960px;
   width: 100%;
+  margin: auto 0;
+  flex-shrink: 0;
   text-align: center;
 }
 
@@ -199,6 +207,7 @@ html, body {
   font-weight: 600;
   letter-spacing: -0.6px;
   margin-bottom: 38px;
+  text-wrap: balance;
 }
 
 .profiles-grid {
@@ -417,6 +426,7 @@ html, body {
 .modal-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding-top: 8px;
   border-top: var(--border-w) solid var(--border-muted);
@@ -589,7 +599,7 @@ html, body {
   justify-content: space-between;
   gap: 10px;
   min-height: 50px;
-  padding: 8px 16px;
+  padding: max(8px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px));
   background-color: rgba(20, 23, 28, 0.86);
   backdrop-filter: blur(10px);
   border-bottom: var(--border-w) solid var(--border-default);
@@ -906,7 +916,7 @@ html, body {
 
 .spine-stage {
   flex: 1;
-  height: clamp(420px, 64vh, 560px);
+  height: clamp(420px, 64dvh, 560px);
   background: transparent;
   border: none;
   overflow: hidden;
@@ -1170,6 +1180,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
 }
@@ -1181,14 +1192,15 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 46px;
-  padding: 0 12px;
+  height: calc(46px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) max(12px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px));
   background-color: var(--bg-surface);
   border-bottom: var(--border-w) solid var(--border-default);
   flex-shrink: 0;
   z-index: 30;
   transition:
     height 0.26s var(--ease-out),
+    padding-top 0.26s var(--ease-out),
     opacity 0.22s var(--ease-out),
     transform 0.26s var(--ease-out),
     border-bottom-width 0.26s var(--ease-out);
@@ -1319,8 +1331,8 @@ html, body {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 44px;
-  padding: 0 12px;
+  height: calc(44px + env(safe-area-inset-bottom, 0px));
+  padding: 0 max(12px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(12px, env(safe-area-inset-left, 0px));
   background-color: var(--bg-surface);
   border-top: var(--border-w) solid var(--border-default);
   flex-shrink: 0;
@@ -1328,6 +1340,7 @@ html, body {
   overflow: hidden;
   transition:
     height 0.26s var(--ease-out),
+    padding-bottom 0.26s var(--ease-out),
     opacity 0.22s var(--ease-out),
     transform 0.26s var(--ease-out),
     border-top-width 0.26s var(--ease-out);
@@ -1346,6 +1359,7 @@ html, body {
 /* Smooth animated hide/show for top & bottom bars */
 #reader-screen.bars-hidden .reader-topbar {
   height: 0;
+  padding-top: 0;
   opacity: 0;
   transform: translateY(-10px);
   border-bottom-width: 0;
@@ -1355,6 +1369,7 @@ html, body {
 
 #reader-screen.bars-hidden .reader-bottombar {
   height: 0;
+  padding-bottom: 0;
   opacity: 0;
   transform: translateY(10px);
   border-top-width: 0;
@@ -1775,6 +1790,9 @@ code, kbd {
 .modal {
   width: 100%;
   max-width: 500px;
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
   background-color: var(--bg-surface);
   border: var(--border-w) solid var(--border-default);
   border-radius: var(--radius-md);
@@ -1788,6 +1806,7 @@ code, kbd {
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: var(--border-w) solid var(--border-default);
+  flex-shrink: 0;
 }
 
 .modal-header h3 {
@@ -1800,6 +1819,8 @@ code, kbd {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .form-group {
@@ -1863,7 +1884,7 @@ code, kbd {
 /* ======================== ADMIN SETTINGS UI ======================== */
 .modal.modal-wide {
   max-width: 680px;
-  max-height: 86vh;
+  max-height: 86dvh;
   display: flex;
   flex-direction: column;
 }
@@ -1998,7 +2019,7 @@ code, kbd {
     display: none;
   }
   .topbar {
-    padding: 6px 10px;
+    padding: max(6px, env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) 6px max(10px, env(safe-area-inset-left, 0px));
     gap: 8px;
   }
   .topbar-left {
@@ -2013,11 +2034,14 @@ code, kbd {
     padding: 16px;
   }
   .spine-stage {
-    height: clamp(300px, 52vh, 380px);
+    height: clamp(280px, 52dvh, 380px);
   }
   .reader-topbar {
-    padding: 0 8px;
+    padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right, 0px)) 0 max(8px, env(safe-area-inset-left, 0px));
     gap: 6px;
+  }
+  .reader-bottombar {
+    padding: 0 max(8px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(8px, env(safe-area-inset-left, 0px));
   }
   .reader-book-title {
     font-size: 13px;
@@ -2033,17 +2057,36 @@ code, kbd {
     top: 0;
     bottom: 0;
   }
+  #profile-screen {
+    padding: max(20px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(28px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  }
   .profile-heading {
-    font-size: 28px;
+    font-size: clamp(1.5rem, 1.15rem + 2.2vw, 1.85rem);
+    margin-bottom: 20px;
+  }
+  .profiles-grid {
+    gap: 18px 14px;
     margin-bottom: 28px;
   }
   .profile-card {
-    width: 128px;
+    width: 104px;
+    gap: 8px;
   }
   .profile-avatar-tile {
-    width: 116px;
-    height: 116px;
-    font-size: 32px;
+    width: 96px;
+    height: 96px;
+    font-size: 28px;
+  }
+  .profile-card-name {
+    font-size: 14px;
+    max-width: 104px;
+  }
+  .profile-card-meta {
+    font-size: 11px;
+    margin-top: -5px;
+  }
+  .profile-footer-actions {
+    gap: 8px;
   }
   .profile-editor-layout {
     flex-direction: column;
@@ -2058,9 +2101,69 @@ code, kbd {
   .brand-name {
     display: none;
   }
+  .search-box {
+    min-width: 0;
+  }
   .profile-pill-btn {
     padding: 0;
     width: 32px;
     justify-content: center;
+  }
+  .profiles-grid {
+    gap: 14px 12px;
+    margin-bottom: 24px;
+  }
+  .profile-card {
+    width: 88px;
+    gap: 6px;
+  }
+  .profile-avatar-tile {
+    width: 82px;
+    height: 82px;
+    font-size: 24px;
+  }
+  .profile-card.add-profile-card .profile-avatar-tile {
+    font-size: 32px;
+  }
+  .profile-card-name {
+    font-size: 13px;
+    max-width: 88px;
+  }
+  .profile-card-meta {
+    font-size: 11px;
+    margin-top: -4px;
+  }
+  .profile-admin-badge {
+    top: 4px;
+    right: 4px;
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+  .profile-lock-badge {
+    top: 4px;
+    left: 4px;
+    font-size: 10px;
+    padding: 1px 4px;
+  }
+  .carousel-wrapper {
+    gap: 6px;
+  }
+  .carousel-nav-btn {
+    width: 34px;
+    height: 56px;
+  }
+  .carousel-footer {
+    padding: 12px 14px;
+  }
+}
+
+@media (pointer: coarse) {
+  .profile-footer-actions .btn {
+    min-height: 40px;
+    padding: 0 14px;
+  }
+  .color-swatch {
+    width: 36px;
+    height: 36px;
   }
 }
